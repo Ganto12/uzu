@@ -10,9 +10,9 @@ from typing import Annotated, Any
 from unittest.mock import patch
 
 import typer
-from bench import BenchRequest, BenchResponse, BenchSampling
-from common import InferenceEngine, get_model_path, get_tokenized_prompt, run_loop
-from mach import MemoryCounters, get_memory_counters
+from bench import BenchRequest, BenchResponse
+from common import InferenceEngine, get_finish_reason, get_model_path, get_sampling, get_tokenized_prompt, run_loop
+from mach import MemoryCounters, get_gpu_energy, get_memory_counters
 from omlx.engine.base import GenerationOutput
 from omlx.engine.batched import BatchedEngine
 from omlx.engine_core import get_mlx_executor
@@ -33,10 +33,12 @@ class OMLXEngine(InferenceEngine):
     def __init__(
         self,
         model: str | Path,
+        sampling: dict,
         *,
         draft_model: str | Path | None = None,
     ):
         super().__init__()
+        self.sampling = get_sampling(sampling)
         self.mtp = False
         self.dflash = draft_model is not None
         self.mtp_model = None
@@ -115,7 +117,7 @@ class OMLXEngine(InferenceEngine):
         return drafter.depth
 
     def _configure_depth(self, depth: int) -> None:
-        if depth < 0 or self.max_depth < depth:
+        if self.max_depth < depth:
             raise ValueError(f"speculative_depth must be between 0 and {self.max_depth} for this engine")
 
         if self.mtp or self.dflash:
@@ -134,37 +136,33 @@ class OMLXEngine(InferenceEngine):
         finally:
             self.runner.close()
 
-    def execute(self, request: BenchRequest) -> list[BenchResponse]:
+    def execute(self, request: BenchRequest) -> BenchResponse:
         if self.closed:
             raise RuntimeError("Engine is closed")
 
         return self.runner.run(self._execute(request))
 
-    async def _execute(self, request: BenchRequest) -> list[BenchResponse]:
-        num_runs = request.num_runs if request.num_runs is not None else 1
-        if num_runs < 1:
-            raise ValueError("num_runs must be 1 or greater")
-
-        if request.max_tokens is not None and request.max_tokens < 0:
-            raise ValueError("max_tokens must be 0 or greater")
-
+    async def _execute(self, request: BenchRequest) -> BenchResponse:
         depth = self.default_depth if request.speculative_depth is None else request.speculative_depth
         self._configure_depth(depth)
 
         prompt: list[int] = get_tokenized_prompt(request, self.engine.tokenizer)
 
-        sampling = request.sampling or BenchSampling()
+        sampling = self.sampling
         generate = partial(
             self.engine.stream_generate,
             prompt=prompt,
-            max_tokens=request.max_tokens or (sys.maxsize - len(prompt) - 1),
-            temperature=sampling.temp if sampling.temp is not None else 0.7,
-            top_p=sampling.top_p if sampling.top_p is not None else 0.9,
-            min_p=sampling.min_p or 0.0,
-            top_k=sampling.top_k or 0,
+            max_tokens=request.max_output_tokens or (sys.maxsize - len(prompt) - 1),
+            temperature=1.0 if sampling.temp is None else sampling.temp,
+            top_p=1.0 if sampling.top_p is None else sampling.top_p,
+            min_p=0.0 if sampling.min_p is None else sampling.min_p,
+            top_k=0 if sampling.top_k is None else sampling.top_k,
+            repetition_penalty=1.0,
+            presence_penalty=0.0,
+            frequency_penalty=0.0,
         )
 
-        return [await self._run(generate, len(prompt), depth) for _ in range(num_runs)]
+        return await self._run(generate, len(prompt), depth)
 
     async def _run(
         self, generate: Callable[[], AsyncIterator[GenerationOutput]], prompt_size: int, depth: int
@@ -174,6 +172,7 @@ class OMLXEngine(InferenceEngine):
         completion_tokens = 0
         response: GenerationOutput | None = None
         mem_counters_max: MemoryCounters = get_memory_counters()
+        speculative = (self.mtp or self.dflash) and depth > 0
         decode_forwards = speculative_forwards = 0
 
         # Public outputs omit target-forward counts.
@@ -196,6 +195,7 @@ class OMLXEngine(InferenceEngine):
                     return original_forward(instance, inputs, *args, **kwargs)
 
                 hooks.enter_context(patch.object(model_type, "__call__", counted))
+            energy_start = get_gpu_energy()
             time_start = time.perf_counter()
             async for response in generate():
                 if response.completion_tokens > completion_tokens:
@@ -211,15 +211,14 @@ class OMLXEngine(InferenceEngine):
                 if counters.graphics_total > mem_counters_max.graphics_total:
                     mem_counters_max = counters
         time_total: float = time.perf_counter() - time_start
+        energy_gpu = get_gpu_energy() - energy_start
 
         if response is None:
             raise RuntimeError("Generation did not return a response")
         if response.finish_reason == "error":
             raise RuntimeError("oMLX generation failed; see engine stderr")
 
-        forward_passes = None
         if self.mtp or self.dflash:
-            forward_passes = decode_forwards
             if depth and completion_tokens > 2 and speculative_forwards == 0:
                 raise RuntimeError("Speculative decoding requested but no verification ran")
             print(
@@ -234,35 +233,32 @@ class OMLXEngine(InferenceEngine):
         decode_time = (
             time_last_token - time_first_token if time_first_token is not None and time_last_token is not None else 0.0
         )
-        prompt_tokens = response.prompt_tokens - response.cached_tokens
+        if response.cached_tokens:
+            raise RuntimeError("oMLX reused cached prompt tokens")
+        prompt_tokens = response.prompt_tokens
+        tokens_per_forward_pass = (completion_tokens - 1) / decode_forwards if speculative and decode_forwards else None
 
         return BenchResponse(
             text=response.text,
+            finish_reason=get_finish_reason(response.finish_reason),
+            prompt_tokens_count=prompt_tokens,
             tokens_count=completion_tokens,
             time_to_first_token=time_to_first_token,
             prompt_tps=prompt_tokens / time_to_first_token if time_to_first_token > 0.0 else 0.0,
             decode_tps=(completion_tokens - 1) / decode_time if decode_time > 0.0 else 0.0,
-            tokens_per_forward_pass=(
-                max(0, completion_tokens - 1) / forward_passes
-                if forward_passes
-                else (1.0 if completion_tokens and forward_passes is None else 0.0)
-            ),
+            tokens_per_forward_pass=tokens_per_forward_pass,
             duration=time_total,
+            energy_gpu=energy_gpu,
             memory_phys_footprint=mem_counters_max.phys_footprint,
             memory_resident=mem_counters_max.resident_size,
             memory_graphics_total=mem_counters_max.graphics_total,
         )
 
 
-def run(
-    model: Annotated[str, typer.Option("-m", "--model")],
-    draft_model: Annotated[
-        str | None, typer.Option("-d", "--draft-model", help="DFlash draft checkpoint path or Hugging Face repository.")
-    ] = None,
-) -> None:
+def run(model: Annotated[Path, typer.Argument(help="Engine model configuration JSON.")]) -> None:
     engine: OMLXEngine
     with redirect_stdout(sys.stderr):
-        engine = OMLXEngine(model, draft_model=draft_model)
+        engine = OMLXEngine(**json.loads(model.read_text()))
     try:
         run_loop(engine)
     finally:

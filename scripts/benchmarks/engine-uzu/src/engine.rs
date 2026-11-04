@@ -10,14 +10,15 @@ use uzu::{
     session::chat::ChatInstanceKind,
     traits::backend::chat_token::{Instance, TokenStreamOutput},
     types::{
-        basic::{SamplingMethod, ToolCall, ToolDescription, ToolFunction, ToolNamespace},
+        basic::{ReasoningEffort, SamplingMethod, ToolCall, ToolDescription, ToolFunction, ToolNamespace},
         session::chat::{ChatConfig, ChatContentBlock, ChatMessage, ChatReplyConfig, ChatRole},
     },
 };
 
 use crate::{
-    bench::{BenchRequest, BenchResponse},
+    bench::{BenchRequest, BenchResponse, BenchSampling, FinishReason},
     common::InferenceEngine,
+    energy::gpu_energy,
     memory::MemoryCounters,
 };
 
@@ -25,10 +26,15 @@ pub struct UzuEngine {
     instance: Arc<dyn Instance>,
     encoding: HanashiEncodingImpl,
     stop_tokens: Box<[u64]>,
+    sampling: SamplingMethod,
 }
 
 impl UzuEngine {
-    pub async fn new(model: &str) -> anyhow::Result<Self> {
+    pub async fn new(
+        model: &str,
+        sampling: &BenchSampling,
+    ) -> anyhow::Result<Self> {
+        let sampling = get_sampling(sampling)?;
         let config = EngineConfig::default().with_allow_ollama_usage(false).with_allow_lmstudio_usage(false);
         let engine = Engine::new(config).await?;
         let model = engine.model(model.to_string()).await?.context("Model not found")?;
@@ -56,6 +62,7 @@ impl UzuEngine {
             instance,
             encoding,
             stop_tokens,
+            sampling,
         })
     }
 
@@ -63,12 +70,14 @@ impl UzuEngine {
         &mut self,
         request: &BenchRequest,
     ) -> anyhow::Result<Vec<u64>> {
-        if let Some(text) = &request.prompt_text {
-            let encoded = self.instance.tokenizer().encode(text.as_str(), true).map_err(anyhow::Error::msg)?;
-            return Ok(encoded.get_ids().iter().copied().map(u64::from).collect());
+        let mut messages = get_chat_messages(request)?;
+        // Hanashi rejects efforts the model's encoding doesn't map.
+        if let Some(effort) = request.reasoning_effort.filter(|effort| *effort != ReasoningEffort::Default) {
+            match messages.first_mut() {
+                Some(first) if first.role == (ChatRole::System {}) => *first = first.with_reasoning_effort(effort),
+                _ => messages.insert(0, ChatMessage::system().with_reasoning_effort(effort)),
+            }
         }
-
-        let messages = get_chat_messages(request)?;
         self.encoding.reset()?;
         self.encoding.encode(messages)?;
         let tokens = self.encoding.state().tokens.iter().map(|token| u64::from(token.id)).collect();
@@ -85,9 +94,11 @@ impl UzuEngine {
         let mut memory = MemoryCounters::collect()?;
         let mut output = Vec::new();
         let mut tokens_generated = 0;
-        let mut forward_passes = 0;
+        let mut metrics = None;
         let mut first_token = None;
+        let mut finish_reason = FinishReason::Length;
 
+        let energy_start = gpu_energy()?;
         let started = Instant::now();
         let mut stream = self.instance.stream(tokens, state.as_mut(), config, CancellationToken::new());
         loop {
@@ -100,34 +111,44 @@ impl UzuEngine {
 
             first_token.get_or_insert_with(Instant::now);
             tokens_generated += 1;
-            let metrics = stream.metrics().context("Generation did not return metrics")?;
-            forward_passes = metrics.num_prefill_forward_passes + metrics.num_decode_forward_passes;
+            metrics = stream.metrics();
 
             let current = MemoryCounters::collect()?;
             if current.graphics_total > memory.graphics_total {
                 memory = current;
             }
             if self.stop_tokens.contains(&token) {
+                finish_reason = FinishReason::Stop;
                 break;
             }
 
             output.push(u32::try_from(token).context("Token ID exceeds u32")?);
         }
         let first_token = first_token.context("Generation did not return a token")?;
+        let metrics = metrics.context("Generation did not return metrics")?;
+        // Each prefill pass proposes and returns one token; only decode passes speculate.
+        let decode_passes = metrics.num_decode_forward_passes;
+        let decode_tokens_proposed = metrics.num_tokens_proposed - metrics.num_prefill_forward_passes;
+        let decode_tokens_accepted = metrics.num_tokens_accepted.saturating_sub(metrics.num_prefill_forward_passes);
         drop(stream);
 
         let text = self.instance.tokenizer().decode(&output, false).map_err(anyhow::Error::msg)?;
         let finished = Instant::now();
+        let energy_gpu = gpu_energy()? - energy_start;
         let time_to_first_token = first_token.duration_since(started).as_secs_f64();
         let decode_duration = finished.duration_since(first_token).as_secs_f64();
         Ok(BenchResponse {
             text,
+            finish_reason,
+            prompt_tokens_count: tokens.len(),
             tokens_count: tokens_generated,
             time_to_first_token,
             prompt_tps: rate(tokens.len(), time_to_first_token),
             decode_tps: rate(tokens_generated.saturating_sub(1), decode_duration),
-            tokens_per_forward_pass: rate(tokens_generated, forward_passes as f64),
+            tokens_per_forward_pass: (decode_tokens_proposed > decode_passes)
+                .then_some(decode_tokens_accepted as f64 / decode_passes as f64),
             duration: finished.duration_since(started).as_secs_f64(),
+            energy_gpu,
             memory_phys_footprint: memory.phys_footprint,
             memory_resident: memory.resident_size,
             memory_graphics_total: memory.graphics_total,
@@ -139,8 +160,8 @@ impl InferenceEngine for UzuEngine {
     async fn execute(
         &mut self,
         request: &BenchRequest,
-    ) -> anyhow::Result<Vec<BenchResponse>> {
-        let (num_runs, config) = get_config(request)?;
+    ) -> anyhow::Result<BenchResponse> {
+        let config = get_config(request, self.sampling.clone())?;
         let tokens = self.tokenize(request)?;
         ensure!(!tokens.is_empty(), "Prompt must contain at least one token");
 
@@ -153,52 +174,53 @@ impl InferenceEngine for UzuEngine {
             );
         }
 
-        let mut responses = Vec::new();
-        for _ in 0..num_runs {
-            let response = self.run_single(&tokens, config.clone()).await?;
-            responses.push(response);
-        }
-
-        Ok(responses)
+        self.run_single(&tokens, config).await
     }
 }
 
-fn get_config(request: &BenchRequest) -> anyhow::Result<(usize, ChatReplyConfig)> {
-    let num_runs = request.num_runs.unwrap_or(1);
-    ensure!(num_runs > 0, "num_runs must be 1 or greater");
-    ensure!(request.prompt_text.is_some() || request.prompt_chat.is_some(), "prompt_text and prompt_chat are absent");
+fn get_config(
+    request: &BenchRequest,
+    sampling: SamplingMethod,
+) -> anyhow::Result<ChatReplyConfig> {
     ensure!(
         request.speculative_depth.is_none(),
         "speculative_depth is not configurable through the Uzu API; omit it to use the model default"
     );
 
     let max_tokens = request
-        .max_tokens
+        .max_output_tokens
         .filter(|count| *count != 0)
         .map(u32::try_from)
         .transpose()
-        .context("max_tokens exceeds the Uzu API limit (u32::MAX)")?;
+        .context("max_output_tokens exceeds the Uzu API limit (u32::MAX)")?;
 
-    let sampling = match &request.sampling {
-        None => SamplingMethod::Greedy {},
-        Some(sampling) if sampling.temp.is_some_and(|temp| temp <= 0.0) => SamplingMethod::Greedy {},
-        Some(sampling) => SamplingMethod::Stochastic {
-            temperature: sampling.temp.map(f64::from),
-            top_k: sampling.top_k.filter(|value| *value > 0).map(i64::from),
-            top_p: sampling.top_p.filter(|value| *value > 0.0 && *value < 1.0).map(f64::from),
-            min_p: sampling.min_p.filter(|value| *value > 0.0).map(f64::from),
-            repetition_penalty: None,
-            suffix_repetition_length: None,
+    Ok(ChatReplyConfig::default().with_token_limit(max_tokens).with_sampling_method(sampling))
+}
+
+fn get_sampling(sampling: &BenchSampling) -> anyhow::Result<SamplingMethod> {
+    Ok(match sampling {
+        BenchSampling::Greedy(_) => SamplingMethod::Greedy {},
+        BenchSampling::Stochastic(sampling) => {
+            ensure!(sampling.temp != Some(0.0), "sampling.temp cannot be 0; use sampling.greedy: true");
+            ensure!(
+                sampling.repetition_penalty.is_none() || sampling.suffix_repetition_length.is_some(),
+                "repetition_penalty requires suffix_repetition_length"
+            );
+            SamplingMethod::Stochastic {
+                temperature: sampling.temp.map(f64::from),
+                top_k: sampling.top_k.map(i64::from),
+                top_p: sampling.top_p.map(f64::from),
+                min_p: sampling.min_p.map(f64::from),
+                repetition_penalty: sampling.repetition_penalty.map(f64::from),
+                suffix_repetition_length: sampling.suffix_repetition_length.map(i64::try_from).transpose()?,
+            }
         },
-    };
-
-    let config = ChatReplyConfig::default().with_token_limit(max_tokens).with_sampling_method(sampling);
-    Ok((num_runs, config))
+    })
 }
 
 fn get_chat_messages(request: &BenchRequest) -> anyhow::Result<Vec<ChatMessage>> {
-    let input = request.prompt_chat.as_ref().context("prompt_text and prompt_chat are absent")?;
-    ensure!(!input.is_empty(), "prompt_chat must not be empty");
+    let input = &request.messages;
+    ensure!(!input.is_empty(), "messages must not be empty");
 
     let mut messages = Vec::new();
     let mut tool_names = HashMap::new();

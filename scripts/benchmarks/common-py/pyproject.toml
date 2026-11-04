@@ -20,7 +20,6 @@ package-dir = { "" = "src" }
 cache-keys = [
     { file = "pyproject.toml" },
     { file = "setup.py" },
-    { file = "src/mach/*.c" },
     { file = "../common-cpp/src/*.c" },
     { file = "../common-cpp/src/*.h" },
 ]

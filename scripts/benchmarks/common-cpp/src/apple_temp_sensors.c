@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/sysctl.h>
+#include <time.h>
 
 #if !defined(__APPLE__) || !defined(__arm64__)
 #error This implementation targets macOS on Apple Silicon.
@@ -314,4 +315,17 @@ kern_return_t get_temp_sensors(apple_temp_sensors_t* out) {
     kern_return_t close_err = apple_temps_close(ctx);
 
     return err != KERN_SUCCESS ? err : close_err;
+}
+
+kern_return_t await_cooldown(void) {
+    apple_temp_sensors_t temp;
+    kern_return_t result = get_temp_sensors(&temp);
+    while (result == KERN_SUCCESS && (temp.cpu_avg >= 60.0 || temp.gpu_avg >= 60.0)) {
+        fprintf(stderr, "Cooling: CPU %.1f°C / GPU %.1f°C (target < 60°C)\n", temp.cpu_avg, temp.gpu_avg);
+        if (nanosleep(&(struct timespec){.tv_sec = 5}, NULL) != 0) {
+            return KERN_ABORTED;
+        }
+        result = get_temp_sensors(&temp);
+    }
+    return result;
 }

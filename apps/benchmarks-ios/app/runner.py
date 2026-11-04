@@ -1,11 +1,10 @@
 import importlib
+import json
 import os
 import sys
 import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
-
-MODEL_OPTIONS = {"-m", "--model", "-d", "--draft-model"}
 
 
 @contextmanager
@@ -40,10 +39,13 @@ def model_paths(*arguments: str) -> list[str]:
         try:
             from common import get_model_path
 
-            paths = list(arguments)
-            for index in range(1, len(paths)):
-                if paths[index - 1] in MODEL_OPTIONS and not os.path.isdir(paths[index]):
-                    paths[index] = get_model_path(paths[index])
+            with open(arguments[0]) as file:
+                config = json.load(file)
+            paths = ["--config", arguments[0]]
+            for key, flag in [("model", "--model"), ("draft_model", "--draft-model")]:
+                model = config.get(key)
+                if model is not None:
+                    paths += [flag, model if os.path.isdir(model) else get_model_path(model)]
         except Exception:  # noqa: BLE001
             traceback.print_exc()
             return []

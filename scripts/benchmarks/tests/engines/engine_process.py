@@ -12,9 +12,7 @@ from typing import NoReturn
 
 import pytest
 from bench import BenchRequest, BenchResponse
-from pydantic import TypeAdapter, ValidationError
-
-RESPONSES = TypeAdapter(list[BenchResponse])
+from pydantic import ValidationError
 
 
 class EngineProcess:
@@ -42,7 +40,7 @@ class EngineProcess:
         finally:
             self.lines.put(None)
 
-    def request(self, request: BenchRequest) -> list[BenchResponse]:
+    def request(self, request: BenchRequest) -> BenchResponse:
         if self.failed:
             pytest.fail("Engine is unavailable after an earlier protocol failure", pytrace=False)
         if self.process.poll() is not None:
@@ -64,9 +62,9 @@ class EngineProcess:
         if not line.endswith("\n"):
             self.fail(f"Response is missing its JSON Lines newline: {line!r}")
         try:
-            return RESPONSES.validate_json(line, strict=True, extra="forbid")
+            return BenchResponse.model_validate_json(line, strict=True, extra="forbid")
         except ValidationError as error:
-            self.fail(f"Invalid BenchResponse array: {error}\nReceived: {line!r}")
+            self.fail(f"Invalid BenchResponse: {error}\nReceived: {line!r}")
 
 
 def kill_process_group(process: subprocess.Popen[str]) -> None:

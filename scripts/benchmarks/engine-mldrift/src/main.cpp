@@ -1,13 +1,28 @@
 #include <cstdio>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <variant>
 
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
 #include "common.hpp"
 #include "engine.hpp"
+
+struct ModelConfig {
+    std::string model;
+    BenchSampling sampling;
+    std::optional<std::string> precision;
+};
+
+ABSL_FLAG(
+    std::string,
+    config,
+    "",
+    "Engine model configuration JSON"
+);
 
 ABSL_FLAG(
     std::string,
@@ -31,6 +46,10 @@ extern "C" int benchmarks_mldrift_main(
     const auto output = std::unique_ptr<std::FILE, decltype(&std::fclose)>(redirect_stdout_to_stderr(), std::fclose);
 
     try {
+        const auto config = read_model_config<ModelConfig>(absl::GetFlag(FLAGS_config));
+        if (!std::holds_alternative<GreedySampling>(config.sampling)) {
+            throw std::invalid_argument("ML Drift supports greedy decoding only");
+        }
         const auto engine = MlDriftEngine(absl::GetFlag(FLAGS_checkpoint), absl::GetFlag(FLAGS_weights));
         run_loop(engine, output.get());
     } catch (const std::exception& error) {

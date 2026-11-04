@@ -10,8 +10,8 @@ from typing import Annotated
 
 import typer
 from bench import BenchRequest, BenchResponse
-from common import InferenceEngine, get_model_path, get_tokenized_prompt, run_loop
-from mach import MemoryCounters, get_memory_counters
+from common import InferenceEngine, get_finish_reason, get_model_path, get_sampling, get_tokenized_prompt, run_loop
+from mach import MemoryCounters, get_gpu_energy, get_memory_counters
 from mtplx.generation import GenerationOutput, VerifyStrategy, generate_ar, generate_mtpk
 from mtplx.profiles import apply_profile_env, runtime_env_overrides_from_contract
 from mtplx.runtime import MTPLXRuntime, load
@@ -23,7 +23,10 @@ class MTPLXEngine(InferenceEngine):
     default_speculative_depth: int
     mtp_history_policy: str
 
-    def __init__(self, model: str | Path):
+    def __init__(self, model: str | Path, sampling: dict):
+        self.sampling = get_sampling(sampling)
+        if self.sampling.min_p not in (None, 0.0):
+            raise ValueError("MTPLX does not support min_p sampling")
         super().__init__()
         local_path = Path(model).expanduser()
         model_path = str(local_path) if local_path.is_dir() else get_model_path(model)
@@ -65,42 +68,31 @@ class MTPLXEngine(InferenceEngine):
 
         return int(depth if depth is not None else 3)
 
-    def execute(self, request: BenchRequest) -> list[BenchResponse]:
-        num_runs = request.num_runs if request.num_runs is not None else 1
-        if num_runs < 1:
-            raise ValueError("num_runs must be 1 or greater")
-
-        if request.max_tokens is not None and request.max_tokens < 0:
-            raise ValueError("max_tokens must be 0 or greater")
-
+    def execute(self, request: BenchRequest) -> BenchResponse:
         depth = request.speculative_depth
         if depth is None:
             depth = self.default_speculative_depth
-
-        if depth < 0:
-            raise ValueError("speculative_depth must be 0 or greater")
 
         if depth and not self.runtime.mtp_enabled:
             raise ValueError("Speculative decoding requires a model with matching MTP weights")
 
         prompt: list[int] = get_tokenized_prompt(request, self.runtime.tokenizer)
 
-        sampler = SamplerConfig()
-        if request.sampling is not None:
-            if request.sampling.min_p not in (None, 0.0):
-                raise ValueError("MTPLX does not support min_p sampling")
-            sampler = SamplerConfig(
-                temperature=request.sampling.temp if request.sampling.temp is not None else sampler.temperature,
-                top_p=request.sampling.top_p if request.sampling.top_p is not None else sampler.top_p,
-                top_k=request.sampling.top_k if request.sampling.top_k is not None else sampler.top_k,
-            )
+        sampling = self.sampling
+        sampler = SamplerConfig(
+            temperature=1.0 if sampling.temp is None else sampling.temp,
+            top_p=1.0 if sampling.top_p is None else sampling.top_p,
+            top_k=0 if sampling.top_k is None else sampling.top_k,
+            presence_penalty=0.0,
+            frequency_penalty=0.0,
+        )
 
         tokenizer = self.runtime.tokenizer
         stop_token_ids: set[int] = set(getattr(tokenizer, "eos_token_ids", None) or ())
         eos_token_id = getattr(tokenizer, "eos_token_id", None)
         if eos_token_id is not None:
             stop_token_ids.add(eos_token_id)
-        if not request.max_tokens and not stop_token_ids:
+        if not request.max_output_tokens and not stop_token_ids:
             raise ValueError("Unlimited generation requires an EOS token")
 
         decoder = (
@@ -119,13 +111,15 @@ class MTPLXEngine(InferenceEngine):
             decoder,
             self.runtime,
             prompt,
-            max_tokens=request.max_tokens or sys.maxsize,
+            max_tokens=request.max_output_tokens or sys.maxsize,
             sampler=sampler,
             stop_token_ids=stop_token_ids,
         )
-        return [self._run(generate, speculative=depth > 0) for _ in range(num_runs)]
+        return self._run(generate, prompt_tokens_count=len(prompt), speculative=depth > 0)
 
-    def _run(self, generate: Callable[..., GenerationOutput], *, speculative: bool) -> BenchResponse:
+    def _run(
+        self, generate: Callable[..., GenerationOutput], *, prompt_tokens_count: int, speculative: bool
+    ) -> BenchResponse:
         # prepare variables
         time_first_token: float = -1.0
         mem_counters_max: MemoryCounters = get_memory_counters()
@@ -143,9 +137,11 @@ class MTPLXEngine(InferenceEngine):
             update_memory()
 
         # create and run inference
+        energy_start = get_gpu_energy()
         time_start: float = time.perf_counter()
         output = generate(token_callback=token_callback, prefill_callback=update_memory)
         time_end = time.perf_counter()
+        energy_gpu = get_gpu_energy() - energy_start
         time_total = time_end - time_start
         update_memory()
 
@@ -155,31 +151,29 @@ class MTPLXEngine(InferenceEngine):
 
         # collect metrics
         decode_tokens = max(0, output.stats.generated_tokens - 1)
-        if speculative:
-            forward_passes = int(output.stats.verify_calls)
-            tokens_per_forward_pass = decode_tokens / forward_passes if forward_passes else 0.0
-        else:
-            # AR does not record verify_calls and emits one token per target forward.
-            tokens_per_forward_pass = float(output.stats.generated_tokens > 0)
+        verify_calls = output.stats.verify_calls
         decode_duration = time_end - time_first_token
 
         return BenchResponse(
             text=output.text,
+            finish_reason=get_finish_reason(output.finish_reason),
+            prompt_tokens_count=prompt_tokens_count,
             tokens_count=output.stats.generated_tokens,
             time_to_first_token=(time_first_token - time_start),
             prompt_tps=output.stats.prompt_tps,
             decode_tps=decode_tokens / decode_duration if decode_duration > 0.0 else 0.0,
-            tokens_per_forward_pass=tokens_per_forward_pass,
+            tokens_per_forward_pass=decode_tokens / verify_calls if speculative and verify_calls else None,
             duration=time_total,
+            energy_gpu=energy_gpu,
             memory_phys_footprint=mem_counters_max.phys_footprint,
             memory_resident=mem_counters_max.resident_size,
             memory_graphics_total=mem_counters_max.graphics_total,
         )
 
 
-def run(model: Annotated[str, typer.Option("-m", "--model")]) -> None:
+def run(model: Annotated[Path, typer.Argument(help="Engine model configuration JSON.")]) -> None:
     with redirect_stdout(sys.stderr):
-        engine = MTPLXEngine(model)
+        engine = MTPLXEngine(**json.loads(model.read_text()))
     run_loop(engine)
 
 

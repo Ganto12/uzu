@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field, JsonValue
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 
 class ChatMessage(BaseModel):
@@ -9,42 +11,49 @@ class ChatMessage(BaseModel):
     tool_call_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
-class BenchSampling(BaseModel):
-    top_k: int | None = None
-    top_p: float | None = None
-    min_p: float | None = None
-    temp: float | None = None
+class GreedySampling(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    greedy: Literal[True]
+
+
+class StochasticSampling(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    top_k: int | None
+    top_p: float | None
+    min_p: float | None
+    temp: float | None
+    repetition_penalty: float | None
+    suffix_repetition_length: int | None
+
+
+BenchSampling = GreedySampling | StochasticSampling
+
+ReasoningEffort = Literal["disabled", "default", "low", "medium", "high", "xhigh"]
+REASONING_LEVELS: tuple[ReasoningEffort, ...] = ("low", "medium", "high", "xhigh")
 
 
 class BenchRequest(BaseModel):
-    prompt_text: str | None = None
-    prompt_chat: list[ChatMessage] | None = None
+    model_config = ConfigDict(extra="forbid")
+    messages: list[ChatMessage]
     tools: list[JsonValue] | None = Field(default=None, exclude_if=lambda value: value is None)
     tool_choice: JsonValue | None = Field(default=None, exclude_if=lambda value: value is None)
 
-    max_tokens: int | None = Field(default=None, ge=0)
+    max_output_tokens: int | None = Field(default=None, ge=0)
     speculative_depth: int | None = Field(default=None, ge=0)
-    sampling: BenchSampling | None = None
-    num_runs: int | None = Field(default=None, ge=0)
-
-    @property
-    def prompt(self) -> str | list[ChatMessage]:
-        if self.prompt_text is not None:
-            return self.prompt_text
-        elif self.prompt_chat is not None:
-            return self.prompt_chat
-        else:
-            raise ValueError("prompt_text and prompt_chat are None")
+    reasoning_effort: ReasoningEffort | None = None
 
 
 class BenchResponse(BaseModel):
     text: str
+    finish_reason: Literal["stop", "length"]
+    prompt_tokens_count: int
     tokens_count: int
     time_to_first_token: float
     prompt_tps: float
     decode_tps: float
-    tokens_per_forward_pass: float
+    tokens_per_forward_pass: float | None
     duration: float
+    energy_gpu: float
     memory_phys_footprint: int
     memory_resident: int
     memory_graphics_total: int

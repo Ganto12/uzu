@@ -1,5 +1,7 @@
 """Launch Splash with the smallest supported target GGUF variant."""
 
+from pathlib import Path
+
 import pytest
 
 from .engine_tests import EngineTests
@@ -18,5 +20,5 @@ class TestSplash(EngineTests):
     engine_name = "splash"
 
     @staticmethod
-    def command(config: pytest.Config) -> list[str]:
-        return ["uv", "run", "--project", "engine-splash", "bench-splash", "--model", config.getoption("splash_model")]
+    def command(config: pytest.Config, model: Path) -> list[str]:
+        return ["uv", "run", "--project", "engine-splash", "bench-splash", str(model)]

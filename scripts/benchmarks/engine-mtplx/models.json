@@ -1,0 +1,90 @@
+{
+  "trymirai/Qwen3.5-4B-L": {
+    "model": "Youssofal/Qwen3.5-4B-MTPLX-Optimized-Quality",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.05,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-4B-M": {
+    "model": "Youssofal/Qwen3.5-4B-MTPLX-Optimized-Speed",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.1,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-9B-L": {
+    "model": "Youssofal/Qwen3.5-9B-MTPLX-Optimized-Speed",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-9B-M": {
+    "model": "Youssofal/Qwen3.5-9B-MTPLX-Optimized-Speed-FP16",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.6-27B-L": {
+    "model": "Youssofal/Qwen3.6-27B-MTPLX-Optimized-Quality",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.6-27B-M": {
+    "model": "Youssofal/Qwen3.6-27B-MTPLX-Optimized-Speed-V2",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.8-27B-L": {
+    "model": "Youssofal/Qwen3.8-27B-MTPLX-Optimized-Quality",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.8-27B-M": {
+    "model": "Youssofal/Qwen3.8-27B-MTPLX-Bare-Speed",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  }
+}

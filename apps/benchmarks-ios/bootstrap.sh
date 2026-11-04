@@ -258,5 +258,5 @@ xcrun --sdk iphoneos clang++ -target "arm64-apple-ios$IPHONEOS_DEPLOYMENT_TARGET
     "$MLXSERVE_STAGE_DIR/lib/libmlx.a" "$MLXSERVE_BUILD_DIR/mlx/mlx/io/libgguflib.a" \
     "$WEBP_BUILD_DIR/libwebp.a" "$WEBP_BUILD_DIR/libsharpyuv.a" \
     -framework Accelerate -framework CoreFoundation -framework Foundation -framework IOKit -framework IOSurface \
-    -framework Metal -framework QuartzCore -Wl,-exported_symbol,_benchmarks_mlxserve_main
+    -framework Metal -framework QuartzCore -lIOReport -Wl,-exported_symbol,_benchmarks_mlxserve_main
 cp "$MLXSERVE_STAGE_DIR/lib/mlx.metallib" "$FRAMEWORK_DIR/"

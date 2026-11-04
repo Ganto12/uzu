@@ -38,9 +38,9 @@ Then run the `Benchmarks` scheme on a device; simulators are not supported.
 
 `bench-ios` benchmarks on one device, chosen by its UDID. Pass it with `--device UDID`, or let `bench-ios` ask: the first command without `--device` lists the paired iPhones and iPads and asks which one to use. The choice is saved in `~/.cache/bench-ios/device` and used until another is chosen with `bench-ios device` or `--device`. Without a terminal, as in CI, pass `--device`.
 
-The app listens on port 7171 while it is open and keeps the screen awake. `bench-ios` reaches it over USB, over Wi-Fi to a paired device, through the CoreDevice tunnel, or at an address given with `--host`. Unless `--host` is given, commands that talk to the app bring it to the foreground first, since iOS suspends it in the background, and `run` and `download` start a fresh app process, as a new engine process starts on macOS. Arguments after `--` go to the engine's command line. Keep the device unlocked.
+The app listens on port 7171 while it is open and keeps the screen awake. `bench-ios` reaches it over USB, over Wi-Fi to a paired device, through the CoreDevice tunnel, or at an address given with `--host`. Unless `--host` is given, commands that talk to the app bring it to the foreground first, since iOS suspends it in the background, and `run` and `download` start a fresh app process, as a new engine process starts on macOS. The positional model JSON file is sent to the app and passed to the engine there. Keep the device unlocked.
 
-`-m` takes the model as each engine expects it: MLX, mlx-serve, MTPLX and oMLX a Hugging Face repository; llama.cpp and Splash a GGUF repository with a quantization, such as `unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M`; ML Drift a pushed directory; uzu a registry identifier such as `trymirai/LFM2.5-230M-M`.
+The model file contains `model` as each engine expects it: MLX, mlx-serve, MTPLX and oMLX a Hugging Face repository; llama.cpp and Splash a GGUF repository with a quantization, such as `unsloth/Qwen3.5-0.8B-GGUF:Q4_K_S`; ML Drift a pushed directory; uzu a registry identifier such as `trymirai/LFM2.5-230M-M`.
 
 Before `run` and `download`, `bench-ios` skips a model that does not fit, with the rule of the macOS benchmark runner: the model's Hugging Face files, or for llama.cpp any GGUF file of the repository, must take at most 75% of the device's memory. For Splash it counts the chosen GGUF variant and the larger of Splash's draft models, since the draft follows the target's configuration. Pushed models and other local paths are not checked.
 
@@ -48,10 +48,12 @@ Before `run` and `download`, `bench-ios` skips a model that does not fit, with t
 cd scripts/benchmarks
 uv run --project platform-ios bench-ios device
 uv run --project platform-ios bench-ios push trymirai/LFM2.5-230M-M
-uv run --project platform-ios bench-ios download -e mlx -m LiquidAI/LFM2.5-230M-MLX-4bit
+printf '%s\n' '{"model":"LiquidAI/LFM2.5-230M-MLX-4bit","sampling":{"greedy":true}}' > mlx-model.json
+uv run --project platform-ios bench-ios download -e mlx mlx-model.json
 uv run --project platform-ios bench-ios models
-uv run --project platform-ios bench-ios run -e uzu -m trymirai/LFM2.5-230M-M <<'EOF'
-{"prompt_chat": [{"role": "user", "content": "Tell me about London"}], "max_tokens": 256, "num_runs": 3}
+printf '%s\n' '{"model":"trymirai/LFM2.5-230M-M","sampling":{"greedy":true}}' > uzu-model.json
+uv run --project platform-ios bench-ios run -e uzu uzu-model.json <<'EOF'
+{"messages": [{"role": "user", "content": "Tell me about London"}], "max_output_tokens": 256}
 EOF
 uv run pytest --engine ios --ios-engine uzu
 ```
@@ -61,9 +63,10 @@ uv run pytest --engine ios --ios-engine uzu
 ML Drift's weight converter does not run on the device, so `mldrift` runs only pushed models. Convert one with `engine-mldrift/run.sh` on this Mac, then push the converted weights together with the checkpoint's other files:
 
 ```bash
-./engine-mldrift/run.sh -m Qwen/Qwen3-0.6B </dev/null
+printf '%s\n' '{"model":"Qwen/Qwen3-0.6B","sampling":{"greedy":true}}' > mldrift-model.json
+./engine-mldrift/run.sh mldrift-model.json </dev/null
 staging="$(mktemp -d)/Qwen3-0.6B-mldrift"
-cp -R "$(ls -td engine-mldrift/workspace/*/q4_0/* | head -1)" "$staging"
+cp -R "$(ls -td "${XDG_CACHE_HOME:-$HOME/.cache}"/uzu-benchmarks/mldrift/*/q4_0/* | head -1)" "$staging"
 rsync -aL --exclude '*.safetensors' "$(hf download --quiet Qwen/Qwen3-0.6B)/" "$staging/"
 uv run --project platform-ios bench-ios push "$staging"
 uv run pytest --engine ios --ios-engine mldrift --ios-model models/Qwen3-0.6B-mldrift

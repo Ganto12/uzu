@@ -1,0 +1,112 @@
+{
+  "trymirai/LFM2.5-2.6B-L": {
+    "model": "LiquidAI/LFM2.5-2.6B-GGUF:Q8_0",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-2.6B-M": {
+    "model": "LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/Muse-Glimmer-30B-L": {
+    "model": "unsloth/Muse-Glimmer-30B-GGUF:UD-Q8_K_XL",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 64,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Muse-Glimmer-30B-M": {
+    "model": "unsloth/Muse-Glimmer-30B-GGUF:UD-Q4_K_XL",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 64,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-4B-L": {
+    "model": "unsloth/Qwen3.5-4B-MTP-GGUF:UD-Q8_K_XL",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.05,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-4B-M": {
+    "model": "unsloth/Qwen3.5-4B-MTP-GGUF:UD-Q4_K_XL",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.1,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-9B-L": {
+    "model": "unsloth/Qwen3.5-9B-MTP-GGUF:UD-Q8_K_XL",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-9B-M": {
+    "model": "unsloth/Qwen3.5-9B-MTP-GGUF:UD-Q4_K_XL",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.8-27B-L": {
+    "model": "unsloth/Qwen3.8-27B-GGUF:UD-Q8_K_XL",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.8-27B-M": {
+    "model": "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_XL",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  }
+}

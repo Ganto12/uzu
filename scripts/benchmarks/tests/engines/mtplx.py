@@ -1,5 +1,7 @@
 """Launch MTPLX with its smallest published native-MTP model pack."""
 
+from pathlib import Path
+
 import pytest
 
 from .engine_tests import EngineTests
@@ -18,5 +20,5 @@ class TestMTPLX(EngineTests):
     engine_name = "mtplx"
 
     @staticmethod
-    def command(config: pytest.Config) -> list[str]:
-        return ["uv", "run", "--project", "engine-mtplx", "bench-mtplx", "--model", config.getoption("mtplx_model")]
+    def command(config: pytest.Config, model: Path) -> list[str]:
+        return ["uv", "run", "--project", "engine-mtplx", "bench-mtplx", str(model)]

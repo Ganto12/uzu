@@ -153,9 +153,12 @@ pub const Batch = struct {
     owned: bool,
 };
 
+pub fn speculative(gen: *const generate.Generator) bool {
+    return gen.dspark_enabled or gen.mtp != null or gen.dflash != null or gen.drafter != null;
+}
+
 pub fn next(gen: *generate.Generator, a: std.mem.Allocator, single: *[1]u32) !?Batch {
-    const speculative = gen.dspark_enabled or gen.mtp != null or gen.dflash != null or gen.drafter != null;
-    if (speculative) {
+    if (speculative(gen)) {
         const result = (if (gen.dspark_enabled)
             try gen.nextDspark(a)
         else if (gen.mtp != null)

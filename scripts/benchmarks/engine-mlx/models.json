@@ -1,0 +1,266 @@
+{
+  "trymirai/LFM2.5-1.2B-Instruct-L": {
+    "model": "LiquidAI/LFM2.5-1.2B-Instruct-MLX-8bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-1.2B-Instruct-M": {
+    "model": "LiquidAI/LFM2.5-1.2B-Instruct-MLX-4bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-1.2B-Thinking-L": {
+    "model": "LiquidAI/LFM2.5-1.2B-Thinking-MLX-8bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-1.2B-Thinking-M": {
+    "model": "LiquidAI/LFM2.5-1.2B-Thinking-MLX-4bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-2.6B-L": {
+    "model": "LiquidAI/LFM2.5-2.6B-MLX-8bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-2.6B-M": {
+    "model": "LiquidAI/LFM2.5-2.6B-MLX-4bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-230M-L": {
+    "model": "LiquidAI/LFM2.5-230M-MLX-8bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-230M-M": {
+    "model": "LiquidAI/LFM2.5-230M-MLX-4bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-350M-L": {
+    "model": "LiquidAI/LFM2.5-350M-MLX-8bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-350M-M": {
+    "model": "LiquidAI/LFM2.5-350M-MLX-4bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/Muse-Glimmer-30B-L": {
+    "model": "mlx-community/Muse-Glimmer-30B-8bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 64,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Muse-Glimmer-30B-M": {
+    "model": "mlx-community/Muse-Glimmer-30B-4bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 64,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-0.8B-L": {
+    "model": "mlx-community/Qwen3.5-0.8B-8bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.1,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-0.8B-M": {
+    "model": "mlx-community/Qwen3.5-0.8B-4bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.1,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-2B-L": {
+    "model": "mlx-community/Qwen3.5-2B-8bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.1,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-2B-M": {
+    "model": "mlx-community/Qwen3.5-2B-4bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.1,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-4B-L": {
+    "model": "mlx-community/Qwen3.5-4B-8bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.05,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-4B-M": {
+    "model": "mlx-community/Qwen3.5-4B-4bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.1,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-9B-L": {
+    "model": "mlx-community/Qwen3.5-9B-8bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-9B-M": {
+    "model": "mlx-community/Qwen3.5-9B-4bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.6-27B-L": {
+    "model": "mlx-community/Qwen3.6-27B-8bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.6-27B-M": {
+    "model": "mlx-community/Qwen3.6-27B-4bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.8-27B-L": {
+    "model": "mlx-community/Qwen3.8-27B-8bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.8-27B-M": {
+    "model": "mlx-community/Qwen3.8-27B-4bit",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  }
+}

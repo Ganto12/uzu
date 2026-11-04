@@ -13,6 +13,7 @@ typedef struct {
 } apple_temp_sensors_t;
 
 kern_return_t get_temp_sensors(apple_temp_sensors_t* out);
+kern_return_t await_cooldown(void);
 
 #ifdef __cplusplus
 }

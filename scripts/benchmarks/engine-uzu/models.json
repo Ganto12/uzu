@@ -1,0 +1,277 @@
+{
+  "trymirai/LFM2.5-1.2B-Instruct-L": {
+    "model": "trymirai/LFM2.5-1.2B-Instruct-L",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-1.2B-Instruct-M": {
+    "model": "trymirai/LFM2.5-1.2B-Instruct-M",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-1.2B-Thinking-L": {
+    "model": "trymirai/LFM2.5-1.2B-Thinking-L",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-1.2B-Thinking-M": {
+    "model": "trymirai/LFM2.5-1.2B-Thinking-M",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-2.6B-L": {
+    "model": "trymirai/LFM2.5-2.6B-L",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-2.6B-M": {
+    "model": "trymirai/LFM2.5-2.6B-M",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-230M-L": {
+    "model": "trymirai/LFM2.5-230M-L",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-230M-M": {
+    "model": "trymirai/LFM2.5-230M-M",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-350M-L": {
+    "model": "trymirai/LFM2.5-350M-L",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/LFM2.5-350M-M": {
+    "model": "trymirai/LFM2.5-350M-M",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.1,
+      "top_k": 50,
+      "top_p": 0.1
+    }
+  },
+  "trymirai/Muse-Glimmer-30B-L": {
+    "model": "trymirai/Muse-Glimmer-30B-L",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 64,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Muse-Glimmer-30B-M": {
+    "model": "trymirai/Muse-Glimmer-30B-M",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 64,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-0.8B-L": {
+    "model": "trymirai/Qwen3.5-0.8B-L",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.1,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-0.8B-M": {
+    "model": "trymirai/Qwen3.5-0.8B-M",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.1,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-2B-L": {
+    "model": "trymirai/Qwen3.5-2B-L",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.1,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-2B-M": {
+    "model": "trymirai/Qwen3.5-2B-M",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.1,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-4B-L": {
+    "model": "trymirai/Qwen3.5-4B-L",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.05,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-4B-M": {
+    "model": "trymirai/Qwen3.5-4B-M",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": 1.1,
+      "suffix_repetition_length": 1024,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-9B-L": {
+    "model": "trymirai/Qwen3.5-9B-L",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.5-9B-M": {
+    "model": "trymirai/Qwen3.5-9B-M",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 0.6,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.6-27B-L": {
+    "model": "trymirai/Qwen3.6-27B-L",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.6-27B-M": {
+    "model": "trymirai/Qwen3.6-27B-M",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.8-27B-L": {
+    "model": "trymirai/Qwen3.8-27B-L",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/Qwen3.8-27B-M": {
+    "model": "trymirai/Qwen3.8-27B-M",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": 1.0,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "trymirai/d3-flash-M": {
+    "model": "trymirai/d3-flash-M",
+    "sampling": {
+      "min_p": null,
+      "repetition_penalty": null,
+      "suffix_repetition_length": null,
+      "temp": null,
+      "top_k": null,
+      "top_p": null
+    }
+  }
+}

@@ -3,16 +3,19 @@ use std::{
     os::fd::{AsFd, AsRawFd, OwnedFd, RawFd},
 };
 
+use anyhow::ensure;
+
 use crate::{
     bench::{BenchRequest, BenchResponse},
     engine::UzuEngine,
+    system::await_cooldown,
 };
 
 pub trait InferenceEngine {
     async fn execute(
         &mut self,
         request: &BenchRequest,
-    ) -> anyhow::Result<Vec<BenchResponse>>;
+    ) -> anyhow::Result<BenchResponse>;
 }
 
 async fn execute(
@@ -21,9 +24,9 @@ async fn execute(
 ) -> anyhow::Result<String> {
     let request = serde_json::from_str::<BenchRequest>(req_str)?;
     let mut redirect = StdoutRedirect::to_stderr()?;
-    let responses = engine.execute(&request).await;
+    let response = engine.execute(&request).await;
     redirect.restore()?;
-    Ok(serde_json::to_string(&responses?)?)
+    Ok(serde_json::to_string(&response?)?)
 }
 
 pub async fn run_loop(engine: &mut UzuEngine) -> anyhow::Result<()> {
@@ -32,6 +35,9 @@ pub async fn run_loop(engine: &mut UzuEngine) -> anyhow::Result<()> {
         if line.trim().is_empty() {
             continue;
         }
+
+        let cooldown_result = unsafe { await_cooldown() };
+        ensure!(cooldown_result == 0, "Cooldown failed ({cooldown_result})");
 
         match execute(engine, &line).await {
             Ok(response_json) => {
