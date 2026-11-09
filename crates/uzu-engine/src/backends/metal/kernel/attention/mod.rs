@@ -1,5 +1,7 @@
 mod policy;
 
+use std::sync::atomic::Ordering;
+
 use crate::{
     backends::{
         common::{
@@ -180,21 +182,33 @@ impl AttentionKernel for AttentionMetalKernel {
             q_off: prefix_len,
             nk: kv_length.div_ceil(kv_layout::TILE_KEYS),
         };
-        let direct = !self.use_mxu && kv_length <= kv_layout::TILE_KEYS;
+        // Batch-invariant mode: every multi-token batch takes the tiled path with one split, so the
+        // keys are reduced in one fixed order whatever the batch length.
+        let invariant = suffix_length >= 2 && command_buffer.context().batch_invariant.load(Ordering::Relaxed);
+        let direct = !invariant && !self.use_mxu && kv_length <= kv_layout::TILE_KEYS;
         let vector_queries = if grouped_rows.is_multiple_of(2) {
             2
         } else {
             1
         };
-        let tile = (self.use_mxu || (!direct && grouped_rows > 4)).then(|| {
+        // Invariant mode never takes the vector kernel (used by default for <= 4 grouped rows). A
+        // query row's result should not depend on how many rows share its tile (checked bit for bit
+        // on 100 probes with varying batch lengths, not proven), and padded rows are never read by
+        // the combine kernel.
+        let tile_for_rows = || {
             self.tiles
                 .iter()
                 .min_by_key(|tile| (grouped_rows.div_ceil(tile.rows) * tile.rows, std::cmp::Reverse(tile.rows)))
                 .unwrap()
-        });
+        };
+        let tile = if invariant || self.use_mxu || (!direct && grouped_rows > 4) {
+            Some(tile_for_rows())
+        } else {
+            None
+        };
         let padded_rows = tile.map_or(grouped_rows, |tile| grouped_rows.next_multiple_of(tile.rows));
         let split_rows = num_groups * padded_rows;
-        let num_splits = if direct {
+        let num_splits = if direct || invariant {
             1
         } else {
             let (threadgroups, groups_per_core) = match tile {

@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use crate::{
     backends::{
         common::{
@@ -131,6 +133,26 @@ impl MatmulMetalKernel {
         gemm_b_layout: GemmBLayout,
         context: &MetalContext,
     ) -> MatmulDispatch {
+        if context.batch_invariant.load(Ordering::Relaxed) && shape.m >= 2 && !shape.b_is_trellis {
+            // One plan for every multi-row batch: the tiling of a full 1024-row prefill batch,
+            // without split-K, so each row's K-sum runs in the same order whatever the batch size.
+            let canonical = MatmulShape {
+                m: 1024,
+                ..*shape
+            };
+            let mut plan =
+                GemmProblem::new(canonical, self.weights_data_type, self.output_data_type, context.supports_mxu)
+                    .select_plan();
+            plan.split_k = 1;
+            // Like `GemmKernel::encode_plan`, validate the plan against the real shape. If it is
+            // invalid, fall back to the normal choice, which is not batch-invariant.
+            if GemmProblem::new(*shape, self.weights_data_type, self.output_data_type, context.supports_mxu)
+                .validate_engine(plan.engine)
+                .is_ok()
+            {
+                return MatmulDispatch::Gemm(plan);
+            }
+        }
         Self::choose_dispatch(
             shape,
             gemm_b_layout,

@@ -128,7 +128,7 @@ impl GemmProblem {
         Ok(self.finish_plan(engine, select_tiling(self.shape, engine)))
     }
 
-    pub(super) fn validate_engine(
+    pub(crate) fn validate_engine(
         &self,
         engine: GemmEngine,
     ) -> Result<(), GemmPlanError> {

@@ -1,3 +1,8 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
 use super::super::{
     DeltaNetChunkedOutputAndStateMetalKernel, DeltaNetChunkedPrecomputeMetalKernel, DeltaNetPrefillPrepMetalKernel,
 };
@@ -22,6 +27,9 @@ const INNER_DATA_TYPE: DataType = DataType::F32;
 
 pub struct MetalDeltaNetChunkedPrefill {
     min_t: u32,
+    /// Shared with `MetalContext::batch_invariant`. When set, every multi-token batch takes the
+    /// chunked path, so a token's result does not depend on whether its batch reached `min_t`.
+    batch_invariant: Arc<AtomicBool>,
     prep: DeltaNetPrefillPrepMetalKernel,
     precompute: DeltaNetChunkedPrecomputeMetalKernel,
     output_and_state: DeltaNetChunkedOutputAndStateMetalKernel,
@@ -57,6 +65,7 @@ impl DeltaNetChunkedPrefill for MetalDeltaNetChunkedPrefill {
 
         Ok(Some(Self {
             min_t: MXU_MIN_T,
+            batch_invariant: context.batch_invariant.clone(),
             prep: DeltaNetPrefillPrepMetalKernel::new(
                 context,
                 outer_data_type,
@@ -82,6 +91,9 @@ impl DeltaNetChunkedPrefill for MetalDeltaNetChunkedPrefill {
         &self,
         suffix_len: u32,
     ) -> bool {
+        if self.batch_invariant.load(Ordering::Relaxed) {
+            return suffix_len >= 2;
+        }
         suffix_len >= self.min_t
     }
 
