@@ -362,3 +362,102 @@ fn unicode_survives_prefix_boundary_detection() {
     assert!(encoding.try_append(&history).unwrap().is_some());
     assert_eq!(&encoding.state().tokens[..sampled.len()], sampled);
 }
+
+#[test]
+fn breakpoint_prefix_length_matches_the_tokens_of_the_full_prompt() {
+    for config in [HanashiConfig::Qwen35, HanashiConfig::Qwen38] {
+        let history = vec![
+            ChatMessage::system().with_text("Stable instructions.".to_string()),
+            ChatMessage::user().with_text("First question.".to_string()),
+            ChatMessage::assistant().with_text("First answer.".to_string()),
+            ChatMessage::user().with_text("Second question.".to_string()),
+        ];
+        let mut full = encoding(config.clone());
+        full.encode(history.clone()).unwrap();
+        let tokens = full.state().tokens.clone();
+        let text = full.state().text();
+
+        let mut previous = 0;
+        for index in 0..history.len() - 1 {
+            let length = encoding(config.clone()).breakpoint_prefix_length(&history, index).unwrap();
+            let length = length.unwrap_or_else(|| panic!("no breakpoint at message {index} for {config:?}"));
+            assert!(length > previous && length < tokens.len(), "{config:?} message {index}: {length}");
+            // The breakpoint is the end of the message's turn: the tokens up to it are the start of the full prompt.
+            let prefix: String = tokens[..length].iter().map(|token| token.value.as_str()).collect();
+            assert!(text.starts_with(&prefix) && prefix.ends_with('\n'), "{config:?} message {index}: {prefix:?}");
+            assert!(prefix.contains(["Stable instructions.", "First question.", "First answer."][index]));
+            assert!(!prefix.contains(["First question.", "First answer.", "Second question."][index]));
+            previous = length;
+        }
+    }
+}
+
+#[test]
+fn breakpoint_prefix_length_requires_declared_tools_to_be_inside_the_prefix() {
+    let history = history();
+    let mut encoding = encoding(HanashiConfig::Qwen35);
+    // The tools declaration is rendered at the top of the system turn, so it is not part of a
+    // prefix that ends before the message declaring it.
+    assert_eq!(encoding.breakpoint_prefix_length(&history, 0).unwrap(), None);
+    let with_tools = encoding.breakpoint_prefix_length(&history, 1).unwrap().unwrap();
+    let mut other_tools = history.clone();
+    let ChatContentBlock::Tools {
+        namespaces,
+    } = &mut other_tools[1].content[0]
+    else {
+        unreachable!()
+    };
+    namespaces.clear();
+    let without_tools = encoding.breakpoint_prefix_length(&other_tools, 1).unwrap().unwrap();
+    assert!(with_tools > without_tools);
+}
+
+#[test]
+fn breakpoint_prefix_length_rejects_unstable_prefixes_without_mutation() {
+    let history = vec![
+        ChatMessage::system().with_text("Stable instructions.".to_string()),
+        ChatMessage::user().with_text("First question.".to_string()),
+        ChatMessage::assistant().with_text("First answer.".to_string()),
+        ChatMessage::user().with_text("Second question.".to_string()),
+    ];
+
+    let mut config = HanashiConfig::Qwen38.resolve().unwrap();
+    // The first rendered line changes with the history length, so no prefix of it is stable.
+    config.rendering.jinja.template.insert_str(0, "{{ messages | length }}\n");
+    let mut unstable = encoding(HanashiConfig::Custom {
+        config,
+    });
+    assert_eq!(unstable.breakpoint_prefix_length(&history, 1).unwrap(), None);
+    assert!(unstable.state().tokens.is_empty() && unstable.state().messages.is_empty());
+
+    let mut stable = encoding(HanashiConfig::Qwen38);
+    assert!(stable.breakpoint_prefix_length(&history, 1).unwrap().is_some());
+    assert_eq!(stable.breakpoint_prefix_length(&history, history.len()).unwrap(), None);
+    assert_eq!(stable.breakpoint_prefix_length(&[], 0).unwrap(), None);
+    assert!(stable.state().tokens.is_empty() && stable.state().messages.is_empty());
+}
+
+#[test]
+fn breakpoint_on_a_lone_system_message_ends_where_the_user_turn_opens() {
+    let history = vec![
+        ChatMessage::system().with_text("Stable instructions.".to_string()),
+        ChatMessage::user().with_text("Question.".to_string()),
+    ];
+    let mut full = encoding(HanashiConfig::Qwen35);
+    full.encode(history.clone()).unwrap();
+    let mut other = history.clone();
+    other[1] = ChatMessage::user().with_text("Something else entirely.".to_string());
+    let mut encoding = encoding(HanashiConfig::Qwen35);
+    let length = encoding.breakpoint_prefix_length(&history, 0).unwrap().unwrap();
+    // The prefix does not depend on the user turn that follows.
+    assert_eq!(encoding.breakpoint_prefix_length(&other, 0).unwrap(), Some(length));
+    let prefix: String = full.state().tokens[..length].iter().map(|token| token.value.as_str()).collect();
+    assert!(prefix.starts_with("<|im_start|>system\nStable instructions.<|im_end|>\n"), "{prefix:?}");
+    assert!(prefix.ends_with("<|im_start|>user\n"), "{prefix:?}");
+}
+
+#[test]
+fn breakpoint_marker_does_not_change_the_rendered_prompt() {
+    let marked: Vec<_> = history().into_iter().map(|message| message.with_kv_cache_breakpoint()).collect();
+    assert_eq!(canonical_text(HanashiConfig::Qwen35, marked), canonical_text(HanashiConfig::Qwen35, history()));
+}

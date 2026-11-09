@@ -40,6 +40,8 @@ pub struct Session {
     encoding: Encoding,
     input_tokens: Vec<u64>,
     stop_token_ids: Box<[u64]>,
+    /// The instance was configured with a `kv_cache_directory`.
+    kv_cache_enabled: bool,
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     energy_recorder: EnergyRecorder,
 }
@@ -58,6 +60,7 @@ impl Session {
         instance: Arc<dyn ChatTokenBackendInstance>,
         _reference: String,
         model: &Model,
+        kv_cache_enabled: bool,
     ) -> Result<Self, ChatSessionError> {
         let encoding_config: Option<EncodingConfig> = model
             .encoding
@@ -105,6 +108,7 @@ impl Session {
             encoding,
             input_tokens: Vec::new(),
             stop_token_ids,
+            kv_cache_enabled,
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             energy_recorder: EnergyRecorder::new(),
         })
@@ -128,6 +132,9 @@ impl Session {
             Ok(cached_tokens) => cached_tokens,
             Err(error) => return error_stream(error),
         };
+        // Only a prompt built from scratch can restore a saved prefix; a live state is already ahead of it.
+        let kv_cache_prefix_length =
+            (self.kv_cache_enabled && cached_tokens_input == 0).then(|| self.kv_cache_prefix_length(input)).flatten();
 
         let instance = self.instance.as_ref();
         #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -138,7 +145,16 @@ impl Session {
         }
         let time_prefill_start = Instant::now();
         let cancel_token = cancel_token.child_token();
-        let stream = instance.stream(&self.input_tokens, self.state.as_mut(), config.clone(), cancel_token.clone());
+        let stream = match kv_cache_prefix_length {
+            Some(prefix_length) => instance.stream_with_prefix_cache(
+                &self.input_tokens,
+                self.state.as_mut(),
+                config.clone(),
+                cancel_token.clone(),
+                prefix_length,
+            ),
+            None => instance.stream(&self.input_tokens, self.state.as_mut(), config.clone(), cancel_token.clone()),
+        };
         let output_tokens_start = self.encoding.state().tokens.len();
 
         let stream_state = StreamingState {
@@ -236,6 +252,26 @@ impl Session {
         );
         self.input_tokens = rendered_ids;
         Ok(0)
+    }
+
+    /// Tokens up to the last message marked with a KV cache breakpoint, if they are a stable
+    /// prefix of the prompt in `self.input_tokens`.
+    fn kv_cache_prefix_length(
+        &mut self,
+        messages: &[ChatMessage],
+    ) -> Option<usize> {
+        let index = messages.iter().rposition(ChatMessage::has_kv_cache_breakpoint)?;
+        match self.encoding.breakpoint_prefix_length(messages, index) {
+            Ok(Some(length)) if length < self.input_tokens.len() => Some(length),
+            Ok(_) => {
+                tracing::debug!("KV cache breakpoint at message {index} is not a stable prompt prefix, skipping");
+                None
+            },
+            Err(error) => {
+                tracing::warn!("KV cache breakpoint at message {index} skipped: {error}");
+                None
+            },
+        }
     }
 
     fn build_input(

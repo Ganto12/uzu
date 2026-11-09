@@ -6,6 +6,8 @@ mod bindings_pyo3;
 mod bindings_wasm;
 mod chat_instance;
 mod error;
+#[cfg(test)]
+mod kv_cache_tests;
 pub mod message;
 pub mod token;
 pub mod tool_call;
@@ -148,7 +150,9 @@ impl ChatSession {
             async move {
                 match instance.kind() {
                     ChatInstanceKind::Token(shared) => {
-                        token::Session::with_instance(shared, instance.reference(), &model).await.map(Instance::Token)
+                        token::Session::with_instance(shared, instance.reference(), &model, instance.kv_cache_enabled())
+                            .await
+                            .map(Instance::Token)
                     },
                     ChatInstanceKind::Message(shared) => {
                         message::Session::with_instance(shared).await.map(Instance::Message)

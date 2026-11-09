@@ -7,6 +7,9 @@ use crate::types::{
     session::chat::{ChatContentBlock, ChatRole},
 };
 
+/// Metadata key set by [`ChatMessage::with_kv_cache_breakpoint`].
+pub const KV_CACHE_BREAKPOINT_KEY: &str = "kv_cache_breakpoint";
+
 #[bindings::export(Structure)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -145,6 +148,19 @@ impl ChatMessage {
             identifier: None,
         })
     }
+
+    /// Marks this message as the end of a reusable prompt prefix. With a `kv_cache_directory` in
+    /// `ChatConfig`, the session saves the prefilled state up to and including this message, and
+    /// later sessions restore it instead of prefilling the prefix again.
+    #[bindings::export(Method)]
+    pub fn with_kv_cache_breakpoint(&self) -> Self {
+        let mut metadata = self.metadata.clone();
+        metadata.values.insert(KV_CACHE_BREAKPOINT_KEY.to_string(), Value::from(serde_json::Value::Bool(true)));
+        Self {
+            metadata,
+            ..self.clone()
+        }
+    }
 }
 
 macro_rules! blocks_by_type {
@@ -193,6 +209,10 @@ impl ChatMessage {
 }
 
 impl ChatMessage {
+    pub fn has_kv_cache_breakpoint(&self) -> bool {
+        self.metadata.values.get(KV_CACHE_BREAKPOINT_KEY).is_some_and(|value| value.json == "true")
+    }
+
     pub fn tool_call_results(&self) -> Vec<(Option<String>, Option<String>, Value)> {
         self.content
             .iter()
@@ -253,5 +273,21 @@ mod tests {
         let messages =
             vec![ChatMessage::user().with_text("a".to_string()), ChatMessage::assistant().with_text("b".to_string())];
         assert_eq!(messages.reasoning_effort(), None);
+    }
+
+    #[test]
+    fn kv_cache_breakpoint_survives_serde_and_old_messages_load() {
+        let message = ChatMessage::system().with_text("Prompt".to_string()).with_kv_cache_breakpoint();
+        assert!(message.has_kv_cache_breakpoint());
+        assert_eq!(message.metadata.values[KV_CACHE_BREAKPOINT_KEY].json, "true");
+
+        let restored: ChatMessage = serde_json::from_str(&serde_json::to_string(&message).unwrap()).unwrap();
+        assert_eq!(restored, message);
+        assert!(restored.has_kv_cache_breakpoint());
+
+        let old = r#"{"role":"system","content":[{"type":"text","value":"Prompt"}],"metadata":{"values":{}}}"#;
+        let old: ChatMessage = serde_json::from_str(old).unwrap();
+        assert!(!old.has_kv_cache_breakpoint());
+        assert!(!ChatMessage::user().has_kv_cache_breakpoint());
     }
 }

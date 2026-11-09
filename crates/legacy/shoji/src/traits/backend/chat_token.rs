@@ -1,9 +1,10 @@
 use std::{pin::Pin, sync::Arc};
 
 use tokenizers::Tokenizer;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
-    traits::backend::{Error, Instance as InstanceTrait},
+    traits::backend::{Error, Instance as InstanceTrait, InstanceStream, State},
     types::{
         basic::SamplingParameters,
         session::chat::{ChatConfig, ChatReplyConfig},
@@ -57,4 +58,18 @@ pub trait Instance:
     fn stop_token_ids(&self) -> Option<Box<[u64]>>;
 
     fn sampling_defaults(&self) -> SamplingParameters;
+
+    /// Like `stream`, for an `input` whose first `prefix_length` tokens end at a KV cache breakpoint.
+    /// A backend with a KV cache directory restores those tokens from it, or prefills and saves them
+    /// there, instead of prefilling them in the stream. The default streams the whole input.
+    fn stream_with_prefix_cache<'a>(
+        &'a self,
+        input: &'a StreamInput,
+        state: &'a mut dyn State,
+        config: ChatReplyConfig,
+        cancel_token: CancellationToken,
+        _prefix_length: usize,
+    ) -> Pin<Box<dyn InstanceStream<Item = Result<StreamOutput, Error>, Metrics = StreamMetrics> + Send + 'a>> {
+        self.stream(input, state, config, cancel_token)
+    }
 }

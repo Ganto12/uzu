@@ -6,7 +6,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures::{Stream, stream};
+use futures::{Stream, StreamExt, stream};
 use shoji::{
     traits::{
         State,
@@ -28,7 +28,15 @@ use tokenizers::Tokenizer;
 use tokio_util::sync::CancellationToken;
 use uzu_engine::{
     backends::Backend,
-    engine::{Engine, language_model::LanguageModel},
+    engine::{
+        Engine,
+        language_model::{
+            LanguageModel,
+            prefix_cache::{PrefixCache, PrefixCacheOutcome},
+            state::LanguageModelState,
+            stream::LanguageModelStream,
+        },
+    },
 };
 
 use crate::engine::bridge::{
@@ -39,11 +47,15 @@ use crate::engine::bridge::{
     },
 };
 
+type GenerationStream<'a> =
+    Pin<Box<dyn Stream<Item = (Result<TokenStreamOutput, ShojiBackendError>, TokenStreamMetrics)> + Send + 'a>>;
+
 #[derive(Clone)]
 pub struct UzuChatTokenBackendInstance<B: Backend> {
     engine: Arc<Engine<B>>,
     model: Arc<LanguageModel<B>>,
     config: ChatConfig,
+    prefix_cache: Option<Arc<PrefixCache>>,
     stop_token_ids: Vec<i32>,
     max_context_length: Option<u32>,
     sampling_defaults: SamplingParameters,
@@ -76,6 +88,7 @@ impl<B: Backend> UzuChatTokenBackendInstance<B> {
         Ok(Self {
             engine,
             model: Arc::new(model),
+            prefix_cache: prefix_cache(&config),
             config,
             stop_token_ids,
             max_context_length,
@@ -119,6 +132,65 @@ impl<B: Backend> BackendInstance for UzuChatTokenBackendInstance<B> {
                 + 'a,
         >,
     > {
+        self.stream_prefixed(input, state, config, cancel_token, None)
+    }
+
+    fn peak_memory_usage(&self) -> Option<usize> {
+        self.engine.peak_memory_usage()
+    }
+}
+
+impl<B: Backend> UzuChatTokenBackendInstance<B> {
+    /// Replaces the empty `state` with the one holding the leading tokens of `prefix`, restored from the
+    /// cache directory or prefilled and saved there. Any failure leaves `state` empty, so the whole input
+    /// is prefilled as without a cache.
+    async fn restore_prefix(
+        &self,
+        cache: &PrefixCache,
+        prefix: &[u64],
+        state: &mut LanguageModelState<B>,
+        sampling_seed: u64,
+    ) {
+        match cache.load_or_prefill(&self.model, prefix, self.max_context_length, sampling_seed).await {
+            Ok((restored, outcome)) => {
+                match &outcome {
+                    PrefixCacheOutcome::Hit(timings) => {
+                        tracing::debug!(tokens = restored.tokens().len(), ?timings, "restored KV cache prefix");
+                    },
+                    PrefixCacheOutcome::Miss {
+                        reason,
+                        save_error,
+                        ..
+                    } => {
+                        tracing::debug!(tokens = restored.tokens().len(), ?reason, "KV cache prefix not found");
+                        if let Some(error) = save_error {
+                            tracing::warn!(%error, "unable to save KV cache prefix");
+                        }
+                    },
+                    PrefixCacheOutcome::TooShort => {},
+                }
+                *state = restored;
+            },
+            Err(error) => tracing::warn!(%error, "KV cache prefix unavailable, prefilling the whole prompt"),
+        }
+    }
+
+    fn stream_prefixed<'a>(
+        &'a self,
+        input: &'a ChatTokenStreamInput,
+        state: &'a mut dyn State,
+        config: ChatReplyConfig,
+        cancel_token: CancellationToken,
+        prefix_length: Option<usize>,
+    ) -> Pin<
+        Box<
+            dyn InstanceStream<
+                    Item = Result<ChatTokenStreamOutput, ShojiBackendError>,
+                    Metrics = ChatTokenStreamMetrics,
+                > + Send
+                + 'a,
+        >,
+    > {
         let state = (state as &mut dyn Any).downcast_mut::<UzuChatTokenBackendInstanceState<B>>().unwrap();
 
         let token_limit = config.token_limit.map(|count| count as usize);
@@ -141,13 +213,14 @@ impl<B: Backend> BackendInstance for UzuChatTokenBackendInstance<B> {
             None
         };
 
-        let model_state = state.value.get_mut();
-        model_state.set_sampling_seed(match config.sampling_seed {
+        let sampling_seed = match config.sampling_seed {
             SamplingSeed::Default {} => state.sampling_seed,
             SamplingSeed::Custom {
                 seed,
             } => seed as u64,
-        });
+        };
+        let model_state = state.value.get_mut();
+        model_state.set_sampling_seed(sampling_seed);
 
         let sampling_method = match get_sampling_method::<B>(&self.model, &config.sampling_policy) {
             Ok(sampling_method) => sampling_method,
@@ -160,16 +233,57 @@ impl<B: Backend> BackendInstance for UzuChatTokenBackendInstance<B> {
         options.sampling_method = sampling_method;
         options.grammar = grammar;
 
-        let stream = match self.model.stream(input, model_state, options) {
-            Ok(stream) => stream,
-            Err(err) => {
-                return Box::pin(NoMetricsStream::new(error_to_stream_output(stream_error_to_backend_error(err))));
-            },
+        let restorable_prefix = self
+            .prefix_cache
+            .as_ref()
+            .zip(prefix_length)
+            .filter(|_| model_state.tokens().is_empty())
+            .map(|(cache, length)| (cache.clone(), length))
+            .filter(|(_, length)| *length < input.len());
+        let cancel_token = cancel_token.child_token();
+
+        let (inner, metrics): (GenerationStream<'a>, _) = if let Some((cache, length)) = restorable_prefix {
+            // Restoring reads and hashes files and runs a prefill, so it happens when the stream is first polled.
+            let inner = stream::once(async move {
+                let prefix = &input[..length];
+                self.restore_prefix(&cache, prefix, model_state, sampling_seed).await;
+                let rest = &input[model_state.tokens().len()..];
+                match self.model.stream(rest, model_state, options) {
+                    Ok(stream) => self.generation_stream(stream, token_limit, cancel_token),
+                    Err(err) => Box::pin(stream::once(std::future::ready((
+                        Err(ShojiBackendError::from(stream_error_to_backend_error(err))),
+                        TokenStreamMetrics::default(),
+                    )))) as GenerationStream<'a>,
+                }
+            })
+            .flatten();
+            (Box::pin(inner), TokenStreamMetrics::default())
+        } else {
+            match self.model.stream(input, model_state, options) {
+                Ok(stream) => {
+                    let metrics = stream.metrics().clone();
+                    (self.generation_stream(stream, token_limit, cancel_token), metrics)
+                },
+                Err(err) => {
+                    return Box::pin(NoMetricsStream::new(error_to_stream_output(stream_error_to_backend_error(err))));
+                },
+            }
         };
 
-        let metrics = stream.metrics().clone();
-        let inner = stream::unfold(
-            (Some(stream), 0, cancel_token.child_token()),
+        Box::pin(UzuChatTokenStream {
+            inner,
+            metrics,
+        })
+    }
+
+    fn generation_stream<'a>(
+        &'a self,
+        stream: LanguageModelStream<'a, B>,
+        token_limit: Option<usize>,
+        cancel_token: CancellationToken,
+    ) -> GenerationStream<'a> {
+        Box::pin(stream::unfold(
+            (Some(stream), 0, cancel_token),
             move |(stream, mut tokens_generated, cancel_token)| async move {
                 let mut stream = stream?;
                 let (mut output, finished) = if cancel_token.is_cancelled() {
@@ -202,16 +316,7 @@ impl<B: Backend> BackendInstance for UzuChatTokenBackendInstance<B> {
                 output
                     .map(|output| ((output, metrics), ((!finished).then_some(stream), tokens_generated, cancel_token)))
             },
-        );
-
-        Box::pin(UzuChatTokenStream {
-            inner: Box::pin(inner),
-            metrics,
-        })
-    }
-
-    fn peak_memory_usage(&self) -> Option<usize> {
-        self.engine.peak_memory_usage()
+        ))
     }
 }
 
@@ -222,6 +327,7 @@ impl<B: Backend> ChatTokenBackendInstance for UzuChatTokenBackendInstance<B> {
     ) -> Box<dyn ChatTokenBackendInstance> {
         Box::new(Self {
             max_context_length: get_max_context_length(&self.model, config.context_length.clone()),
+            prefix_cache: prefix_cache(&config),
             config,
             ..self.clone()
         })
@@ -242,17 +348,37 @@ impl<B: Backend> ChatTokenBackendInstance for UzuChatTokenBackendInstance<B> {
     fn sampling_defaults(&self) -> SamplingParameters {
         self.sampling_defaults
     }
+
+    fn stream_with_prefix_cache<'a>(
+        &'a self,
+        input: &'a ChatTokenStreamInput,
+        state: &'a mut dyn State,
+        config: ChatReplyConfig,
+        cancel_token: CancellationToken,
+        prefix_length: usize,
+    ) -> Pin<
+        Box<
+            dyn InstanceStream<
+                    Item = Result<ChatTokenStreamOutput, ShojiBackendError>,
+                    Metrics = ChatTokenStreamMetrics,
+                > + Send
+                + 'a,
+        >,
+    > {
+        self.stream_prefixed(input, state, config, cancel_token, Some(prefix_length))
+    }
 }
 
-struct UzuChatTokenStream<S> {
-    inner: Pin<Box<S>>,
+fn prefix_cache(config: &ChatConfig) -> Option<Arc<PrefixCache>> {
+    config.kv_cache_directory.as_ref().map(|directory| Arc::new(PrefixCache::new(directory)))
+}
+
+struct UzuChatTokenStream<'a> {
+    inner: GenerationStream<'a>,
     metrics: TokenStreamMetrics,
 }
 
-impl<S> Stream for UzuChatTokenStream<S>
-where
-    S: Stream<Item = (Result<TokenStreamOutput, ShojiBackendError>, TokenStreamMetrics)>,
-{
+impl Stream for UzuChatTokenStream<'_> {
     type Item = Result<TokenStreamOutput, ShojiBackendError>;
 
     fn poll_next(
@@ -269,10 +395,7 @@ where
     }
 }
 
-impl<S> InstanceStream for UzuChatTokenStream<S>
-where
-    S: Stream<Item = (Result<TokenStreamOutput, ShojiBackendError>, TokenStreamMetrics)>,
-{
+impl InstanceStream for UzuChatTokenStream<'_> {
     type Metrics = ChatTokenStreamMetrics;
 
     fn metrics(&self) -> Self::Metrics {

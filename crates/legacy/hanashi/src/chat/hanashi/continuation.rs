@@ -87,6 +87,63 @@ impl HanashiEncodingImpl {
         Ok(Some(suffix_ids))
     }
 
+    /// Number of leading tokens of the full prompt that end after `messages[index]`, for saving
+    /// the prefilled state at that message. Returns None without changing state when the prompt
+    /// rendered for the whole history does not start with the text, and the tokens, of the history
+    /// up to `index`, since the prefix tokens could then differ from the ones sent.
+    pub fn breakpoint_prefix_length(
+        &mut self,
+        messages: &[ChatMessage],
+        index: usize,
+    ) -> Result<Option<usize>, Error> {
+        if index >= messages.len() {
+            return Ok(None);
+        }
+        let messages = self.fill_default_content(messages)?;
+        let full_text = self.render_messages(&messages, true)?;
+        let Some(prefix_text) = self.render_prefix(&messages[..=index])? else {
+            return Ok(None);
+        };
+        if prefix_text.is_empty() || !full_text.starts_with(&prefix_text) {
+            return Ok(None);
+        }
+
+        let prefix_ids = self.tokenize(&prefix_text)?;
+        let full_ids = self.tokenize(&full_text)?;
+        if prefix_ids.is_empty() || prefix_ids.len() >= full_ids.len() || !full_ids.starts_with(&prefix_ids) {
+            return Ok(None);
+        }
+        Ok(Some(prefix_ids.len()))
+    }
+
+    /// The text `prefix` renders to without a generation prompt. Some templates refuse to render
+    /// a history without a user turn (e.g. a lone system message); for those the prefix is the
+    /// text two renders share when the history is followed by different user turns, which ends
+    /// with the opening of that user turn.
+    fn render_prefix(
+        &mut self,
+        prefix: &[ChatMessage],
+    ) -> Result<Option<String>, Error> {
+        if let Ok(text) = self.render_messages(prefix, false) {
+            return Ok(Some(text));
+        }
+        if prefix.iter().any(|message| matches!(message.role, ChatRole::User {})) {
+            return Ok(None);
+        }
+        let mut renders = Vec::new();
+        for probe in ["A", "B"] {
+            let mut probed = prefix.to_vec();
+            probed.push(ChatMessage::user().with_text(probe.to_string()));
+            match self.render_messages(&probed, false) {
+                Ok(text) => renders.push(text),
+                Err(_) => return Ok(None),
+            }
+        }
+        let shared = renders[0].bytes().zip(renders[1].bytes()).take_while(|(a, b)| a == b).count();
+        let end = (0..=shared).rev().find(|&end| renders[0].is_char_boundary(end)).unwrap_or(0);
+        Ok(Some(renders[0][..end].to_string()))
+    }
+
     fn empty_copy(&self) -> Result<Self, Error> {
         Self::new(
             HanashiConfig::Custom {

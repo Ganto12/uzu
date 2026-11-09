@@ -155,7 +155,7 @@ async fn session() -> (ChatSession, Arc<FunctionGemma>) {
         },
         Some(encoding.into()),
     );
-    let instance = token::Session::with_instance(backend.clone(), String::new(), &model).await.unwrap();
+    let instance = token::Session::with_instance(backend.clone(), String::new(), &model, false).await.unwrap();
     let mut session = ChatSession {
         instance: Arc::new(Mutex::new(Instance::Token(instance))),
         state: Arc::new(Mutex::new(ChatSessionState::Idle)),

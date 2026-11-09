@@ -28,6 +28,7 @@ pub struct ChatInstance {
     kind: ChatInstanceKind,
     model: Model,
     reference: String,
+    kv_cache_enabled: bool,
 }
 
 impl ChatInstance {
@@ -41,6 +42,7 @@ impl ChatInstance {
             return Err(ChatSessionError::UnsupportedModel {});
         }
         let reference = path.unwrap_or_else(|| model.identifier.clone());
+        let kv_cache_enabled = config.kv_cache_directory.is_some();
 
         let kind_future = {
             let reference = reference.clone();
@@ -65,6 +67,7 @@ impl ChatInstance {
             kind,
             model,
             reference,
+            kv_cache_enabled,
         })
     }
 
@@ -74,6 +77,10 @@ impl ChatInstance {
 
     pub fn reference(&self) -> String {
         self.reference.clone()
+    }
+
+    pub fn kv_cache_enabled(&self) -> bool {
+        self.kv_cache_enabled
     }
 }
 

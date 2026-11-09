@@ -52,6 +52,20 @@ impl Encoding {
         }
     }
 
+    /// Length in tokens of the prompt prefix that ends after `messages[index]`, or None when the
+    /// prefix is not a stable prefix of the full prompt (see `HanashiEncodingImpl`).
+    pub fn breakpoint_prefix_length(
+        &mut self,
+        messages: &[ChatMessage],
+        index: usize,
+    ) -> Result<Option<usize>, Error> {
+        match self {
+            Self::Hanashi(inner) => inner.breakpoint_prefix_length(messages, index).map_err(Into::into),
+            #[cfg(not(target_family = "wasm"))]
+            Self::Harmony(_) => Ok(None),
+        }
+    }
+
     pub fn flush(&mut self) -> Result<bool, Error> {
         match self {
             Self::Hanashi(inner) => inner.flush().map_err(Into::into),
