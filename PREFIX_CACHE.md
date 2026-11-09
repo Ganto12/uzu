@@ -3,7 +3,7 @@
 Prototype for [#792](https://github.com/trymirai/uzu/issues/792): prefill a long prompt prefix once, save the state to
 disk, restore it in any new session.
 
-**8K-token prefix: 3.66 s → 82 ms to first token.** Byte-identical output. M1 Pro, Qwen 3.5 0.8B.
+**8K-token prefix: 3.66 s → 82 ms to first token.** Byte-identical output at 1,024-token boundaries. M1 Pro, Qwen 3.5 0.8B.
 
 ## How it works
 
@@ -35,9 +35,10 @@ Time to first token, cold restore from SSD, median of 15 runs.
 - **Safe:** 10/10 bad or mismatched files miss and fall back.
 - **Fast as the disk:** restore is 10–21 ms, read at ~6 GB/s.
 - **Chat:** 4,400-token system prompt, 2.2 s → 0.19 s, same output.
+- **Catch:** only the 1,024-aligned part is cached. A 1,499-token prompt gets 2.7x; under 1,024 tokens, nothing.
 
 Opt-in batch-invariant mode: exact restores at any 64-token boundary (1,499 tokens: 2.7x → 8.6x); no measurable quality
-change vs a CPU reference. Off by default.
+change vs a CPU reference on 48 probes, though it narrowly misses our pre-set 20% non-inferiority margin. Off by default.
 
 ## More
 
