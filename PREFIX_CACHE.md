@@ -1,69 +1,55 @@
 # Persistent prefill state for uzu
 
-Prototype for [trymirai/uzu#792](https://github.com/trymirai/uzu/issues/792): save the fully prefilled model state to
-disk and restore it in a new session or process, so a long shared prefix (system prompt, tool definitions, a document) is
-prefilled once, not on every start.
+Prototype for [trymirai/uzu#792](https://github.com/trymirai/uzu/issues/792): prefill a long shared prefix (system
+prompt, tool definitions, a document) once, save the state to disk, restore it in any new session or process.
 
-**Result:** on an M1 Pro with Qwen 3.5 0.8B, an 8K-token prefix goes from 3.66 s to 82 ms to first token in a
-fresh process. Restored state is byte-identical to an uncached prefill at prefill-batch boundaries, and any mismatched or damaged file falls back to a normal prefill.
+**Result:** M1 Pro, Qwen 3.5 0.8B, 8K-token prefix: 3.66 s -> 82 ms to first token in a fresh process. Restored state
+is byte-identical to an uncached prefill at prefill-batch boundaries; any mismatched or damaged file falls back to a
+normal prefill.
 
-Setup for every number: Apple M1 Pro 16 GB, internal SSD (~6-7 GB/s read), Metal without MXU; Qwen 3.5 0.8B and
-LFM2.5 230M in uzu's 4-bit `mirai-m:4` format; attention KV cached in the same int8 + bf16-scale format uzu uses in
-memory, so cached and uncached runs use identical numerics. Greedy decoding unless stated.
+Setup: Apple M1 Pro 16 GB, internal SSD (~6-7 GB/s), Metal without MXU; Qwen 3.5 0.8B and LFM2.5 230M in uzu's 4-bit
+`mirai-m:4` format; KV cached in uzu's own int8 + bf16-scale format, so cached and uncached numerics are identical.
+Greedy unless stated.
 
-## How it works
-
-```
-prompt: [ prefix, rounded down to 1,024 tokens | rest + new message ]
-                 |
-     snapshot on disk with a matching key?
-       yes -> read, verify checksum, copy into GPU state
-       no  -> prefill as usual, save snapshot
-                 |
-     prefill [ rest + new message ] -> first token
-```
-
-## What is stored
-
-Qwen 3.5 is hybrid (18 Gated DeltaNet layers, 6 attention layers), so attention KV alone cannot reproduce the state.
-A snapshot holds the whole `LanguageModelState`:
-
-- attention KV as uzu keeps it in memory (int8 codes, bf16 scales); shared-KV layers are stored by reference
-- Gated DeltaNet recurrent and convolution state, ShortConv state
-- the prefix tokens and the last output token
-
-Each mixer describes its own layout through `MixerState` hooks, so new mixer types opt in without a format change.
+## Architecture
 
 ```
-file.uzkv = magic | version | JSON header (key, layout, checksum) | prefix tokens | state buffers
+  ChatSession ── message.with_kv_cache_breakpoint()      config.with_kv_cache_directory()
+       │
+       │ prefix tokens (rounded down to the 1,024-token prefill batch)
+       ▼
+  PrefixCache::load_or_prefill
+       ├── hit  ─▶ restore_state_snapshot: read file ─▶ check key + xxh3 ─▶ GPU copy
+       ├── miss ─▶ prefill ─▶ save_state_snapshot (temp file + rename, 0600)
+       ▼
+  LanguageModelState            saved per layer through MixerState hooks
+   ├─ attention    KV codes (int8) + scales (bf16); shared-KV layers by reference
+   ├─ DeltaNet     recurrent + conv state
+   ├─ ShortConv    conv state
+   └─ tokens       prefix tokens, last output token
+       │
+       ▼
+  stream(rest of prompt + new message) ─▶ first token
+
+
+  file.uzkv   magic │ version │ JSON header │ prefix tokens │ state buffers
+  layout      payload 16 KiB-aligned, each buffer 256 B-aligned
+  header      key parts, layer layout, sizes, xxh3 of the payload
+  key         format │ model blake3 │ device (GPU, cores, MXU) │ kernel source hash │ numerics mode │ exact tokens
 ```
 
-The JSON header carries every key part, the layer layout and sizes, and the xxh3 checksum of the payload; the payload
-starts on a page boundary, each layer buffer at a 256-byte aligned offset. Written to a temp file and renamed into place; owner-only (directory 0700, file 0600); two saves of the same prompt
-are byte-identical.
-
-## When a snapshot is used
-
-Restored only if every key part matches; anything else is a miss and a normal prefill, never a wrong restore:
-
-| Key part | Why |
-|---|---|
-| Format version | layout changes |
-| Model fingerprint (blake3 of the weights) | different weights or quantisation |
-| Device fingerprint (GPU name, core count, MXU) | kernel plans and results depend on them |
-| Kernel build identity (hash of the kernel sources) | a kernel change can change results |
-| Numerics mode | batch-invariant vs default kernels |
-| Exact prefix tokens, layer layout, sizes, checksum | wrong prompt, wrong model shape, damaged file |
-
-All 10 negative cases (corrupt payload, truncated file, bad header, other model, device, kernel build or numerics
-mode, wrong tokens, context too small, missing file) miss with the right reason on both models.
-
-**Hit rules.** uzu prefills in 1,024-token batches, and a snapshot on a batch boundary reproduces the uncached run
-exactly, so snapshots align down to it (`SnapshotAlignment::PrefillBatch`) and the rest of the prompt is prefilled with
-the new message. A snapshot covers an exact token prefix; prompts under 1,024 tokens are not cached. A diverging prompt misses (recurrent state cannot be
-trimmed, so a longer snapshot is never partly reused). Snapshots restore into a fresh state, in the same process or a new one. On a miss, `PrefixCache::load_or_prefill` prefills
-and saves a fresh snapshot, atomically replacing a stale or damaged file; it saves nothing when the device or build
-is unsupported (unknown device or kernel identity).
+- **Why the whole state:** Qwen 3.5 is hybrid (18 Gated DeltaNet + 6 attention layers); KV alone can't reproduce it.
+  New mixer types opt in through the hooks without a format change.
+- **Miss, never a wrong restore:** any key mismatch, bad size, layout or checksum is a miss and a normal prefill. All
+  10 negative cases (corrupt payload, truncated file, bad header, other model, device, kernel build or numerics mode,
+  wrong tokens, context too small, missing file) miss with the right reason on both models.
+- **Hit rules:** a snapshot covers an exact token prefix, aligned down to uzu's 1,024-token prefill batch
+  (`SnapshotAlignment::PrefillBatch`), where it reproduces the uncached run exactly. Prompts under 1,024 tokens aren't
+  cached; a diverging prompt misses (recurrent state can't be trimmed, so longer snapshots are never partly reused).
+  Restores go into a fresh state, same process or new.
+- **Saving:** a miss saves a fresh snapshot, atomically replacing a stale or damaged file; nothing is saved when the
+  device or kernel identity is unknown. Files are owner-only (dir 0700, file 0600); two saves of one prompt are
+  byte-identical.
 
 ### Exactness
 
@@ -122,19 +108,12 @@ let config = ChatConfig::default().with_kv_cache_directory(Some(cache_dir));
 let system = ChatMessage::system().with_text(long_instructions).with_kv_cache_breakpoint();
 ```
 
-```
-reply(messages)
-  breakpoint + cache dir set -> prefix tokens -> load_or_prefill(prefix) -> stream the rest
-  otherwise                  -> normal prefill
-```
+- The breakpoint is a metadata flag on `ChatMessage`; chat template and serialized format are untouched.
+- On reply, the messages up to the breakpoint are rendered on their own; if their tokens are an exact prefix of the
+  full prompt, that prefix is restored from disk instead of prefilled. Otherwise nothing changes.
+- The last marked message wins; the cache is used only when the session starts from an empty state.
 
-The breakpoint marks the end of a reusable prefix. When a new session's rendered prompt starts with the same tokens up
-to that message, the state is restored from disk instead of prefilled; otherwise nothing changes, including when the
-template cannot render the prefix on its own as an exact token prefix of the full prompt. The marker is a metadata flag on `ChatMessage`,
-so the chat template and serialized format are untouched. If several
-messages are marked, the last one wins; the cache is only used when the session starts from an empty state.
-
-Qwen 3.5 0.8B, 4,400-token system prompt, a new `ChatSession` each time: 2.2-2.5 s to first token without the
+Qwen 3.5 0.8B, 4,400-token system prompt, new `ChatSession` each time: 2.2-2.5 s to first token without the
 breakpoint, 0.19 s on a hit, identical output across all three sessions; the first session pays a one-off save.
 
 ## Opt-in experiment: batch-invariant prefill
