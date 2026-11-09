@@ -2,7 +2,7 @@ use derive_more::Debug;
 use thiserror::Error;
 
 use crate::{
-    backends::common::Backend,
+    backends::common::{Backend, Context},
     encodable_block::{dflash::DFlashState, sampling::PRng, transformer::TransformerState},
     engine::language_model::LanguageModel,
 };
@@ -14,6 +14,11 @@ pub struct LanguageModelState<B: Backend> {
     pub(super) transformer_state: TransformerState<B>,
     pub(super) speculator_state: Option<DFlashState<B>>,
     pub(super) max_context_length: Option<u32>,
+    /// `Context::batch_invariant()` when this state was created. A state is only snapshotted if
+    /// the flag still has this value and no stream ran under a different one
+    /// (`numerics_mode_changed`), so the header records the numerics the bytes were made with.
+    pub(super) batch_invariant: bool,
+    pub(super) numerics_mode_changed: bool,
 }
 
 impl<B: Backend> LanguageModelState<B> {
@@ -67,6 +72,8 @@ impl<B: Backend> LanguageModel<B> {
             transformer_state,
             speculator_state,
             max_context_length,
+            batch_invariant: self.engine.context.batch_invariant(),
+            numerics_mode_changed: false,
         })
     }
 }

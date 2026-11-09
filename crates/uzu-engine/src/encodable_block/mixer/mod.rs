@@ -4,7 +4,7 @@ use derive_more::Debug;
 use thiserror::Error;
 
 use crate::{
-    backends::common::{Backend, CommandBuffer},
+    backends::common::{Backend, CommandBuffer, GpuBuffer},
     config::{rope::AnyRoPEConfig, token_mixer::AnyTokenMixerConfig},
     data_type::DataType,
     encodable_block::{
@@ -24,7 +24,56 @@ pub mod attention;
 pub mod delta_net;
 pub mod short_conv;
 
+/// Serializable description of one mixer's persistent state, used by the prefix-cache snapshot
+/// format (`engine::language_model::prefix_cache`).
+///
+/// `kind` identifies the mixer type, `meta` carries small scalar state (cache lengths, ring
+/// offsets, layout parameters) and `buffer_bytes` lists how many leading bytes of each buffer
+/// returned by `snapshot_buffers` hold live state.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MixerSnapshotLayout {
+    pub kind: u32,
+    pub meta: Vec<u64>,
+    pub buffer_bytes: Vec<u64>,
+}
+
+pub const MIXER_SNAPSHOT_KIND_ATTENTION: u32 = 1;
+pub const MIXER_SNAPSHOT_KIND_DELTA_NET: u32 = 2;
+pub const MIXER_SNAPSHOT_KIND_SHORT_CONV: u32 = 3;
+
 pub trait MixerState<B: Backend>: Any + Send {
+    /// Describes the accepted state. Returns an error if an unaccepted suffix is in flight, since
+    /// such a state cannot be snapshotted.
+    fn snapshot_layout(&self) -> Result<MixerSnapshotLayout, String>;
+
+    /// Buffers holding the state, in the order of `snapshot_layout().buffer_bytes`.
+    fn snapshot_buffers(&self) -> Vec<&dyn GpuBuffer<Backend = B>>;
+
+    /// Zeroes, in the CPU copies of the live bytes of each snapshot buffer (`buffers`, in
+    /// `snapshot_buffers` order, `buffer_bytes[i]` long), every byte the state's kernels have
+    /// not written: bytes of the GPU buffers that may hold uninitialised memory. Returns `false`
+    /// if the state cannot prove which bytes those are, in which case the snapshot is refused.
+    fn zero_unwritten_snapshot_bytes(
+        &self,
+        buffers: &mut [&mut [u8]],
+    ) -> bool;
+
+    /// Same buffers as `snapshot_buffers`, mutable, for restoring.
+    fn snapshot_buffers_mut(&mut self) -> Vec<&mut dyn GpuBuffer<Backend = B>>;
+
+    /// Validates a saved layout against this (empty) state and adopts its scalar state.
+    /// `context_length` is the number of tokens the snapshot covers. The layout comes from a
+    /// file and is untrusted: implementations must validate every value before use. Returns a
+    /// human-readable reason on mismatch; the caller treats that as a cache miss.
+    ///
+    /// On `Err` the state may be left partially modified (for a whole transformer, earlier layers
+    /// may already have adopted the layout). The state must then be discarded, never used.
+    fn restore_layout(
+        &mut self,
+        layout: &MixerSnapshotLayout,
+        context_length: u32,
+    ) -> Result<(), String>;
+
     fn prepare(
         &mut self,
         context_length: u32,

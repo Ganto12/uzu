@@ -1,4 +1,8 @@
-use std::{io, path::Path, sync::Arc};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::{Arc, OnceLock},
+};
 
 use derive_more::Debug;
 use thiserror::Error;
@@ -19,6 +23,7 @@ use crate::{
 };
 pub use crate::{config::model::generation::GenerationConfig, utils::strict_serde::Unsupported};
 
+pub mod prefix_cache;
 pub mod state;
 pub mod stream;
 
@@ -34,6 +39,8 @@ pub struct LanguageModel<B: Backend> {
     end_of_thinking_tag: Option<String>,
     tokenizer: Arc<Tokenizer>,
     vocab_size: usize,
+    model_path: PathBuf,
+    model_fingerprint: OnceLock<Result<[u8; 32], String>>,
 }
 
 #[derive(Debug, Error)]
@@ -115,6 +122,8 @@ impl<B: Backend> Engine<B> {
             end_of_thinking_tag,
             tokenizer,
             vocab_size,
+            model_path: model_path.to_path_buf(),
+            model_fingerprint: OnceLock::new(),
         })
     }
 }

@@ -18,7 +18,7 @@ use crate::{
         batch_topology::BatchTopology,
         linear::{Linear, LinearBlockError},
         mixer::{
-            Mixer, MixerEncodeError, MixerState,
+            MIXER_SNAPSHOT_KIND_DELTA_NET, Mixer, MixerEncodeError, MixerSnapshotLayout, MixerState,
             attention::rope::PrecalculatedRoPE,
             delta_net::tree_verify::{TreeVerifyEncodeArguments, TreeVerifyNewArguments},
         },
@@ -57,6 +57,54 @@ pub struct DeltaNetState<B: Backend> {
 }
 
 impl<B: Backend> MixerState<B> for DeltaNetState<B> {
+    fn snapshot_layout(&self) -> Result<MixerSnapshotLayout, String> {
+        if self.suffix_status.is_some() {
+            return Err("delta net state has an unaccepted suffix".to_string());
+        }
+        Ok(MixerSnapshotLayout {
+            kind: MIXER_SNAPSHOT_KIND_DELTA_NET,
+            meta: vec![self.is_empty as u64],
+            buffer_bytes: vec![self.conv_state.size() as u64, self.ssm_state.size() as u64],
+        })
+    }
+
+    fn snapshot_buffers(&self) -> Vec<&dyn GpuBuffer<Backend = B>> {
+        vec![&self.conv_state, &self.ssm_state]
+    }
+
+    fn zero_unwritten_snapshot_bytes(
+        &self,
+        buffers: &mut [&mut [u8]],
+    ) -> bool {
+        // An empty state was never written; the first encode zero-fills it, so zeros are its value.
+        if self.is_empty {
+            buffers.iter_mut().for_each(|buffer| buffer.fill(0));
+        }
+        true
+    }
+
+    fn snapshot_buffers_mut(&mut self) -> Vec<&mut dyn GpuBuffer<Backend = B>> {
+        vec![&mut self.conv_state, &mut self.ssm_state]
+    }
+
+    fn restore_layout(
+        &mut self,
+        layout: &MixerSnapshotLayout,
+        _context_length: u32,
+    ) -> Result<(), String> {
+        let expected = vec![self.conv_state.size() as u64, self.ssm_state.size() as u64];
+        if layout.kind != MIXER_SNAPSHOT_KIND_DELTA_NET || layout.meta.len() != 1 || layout.buffer_bytes != expected {
+            return Err(format!("delta net: layout mismatch, saved {layout:?}, expected bytes {expected:?}"));
+        }
+        if layout.meta[0] > 1 {
+            return Err(format!("delta net: invalid is_empty flag {}", layout.meta[0]));
+        }
+        // An empty saved state stays empty (zero-filled on first use); otherwise the restored
+        // buffers are authoritative and must not be cleared by the first encode.
+        self.is_empty = layout.meta[0] != 0;
+        Ok(())
+    }
+
     fn prepare(
         &mut self,
         _context_length: u32,

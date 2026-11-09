@@ -15,6 +15,7 @@ mod slang;
 mod webgpu;
 
 mod cpu;
+mod identity;
 
 fn main() -> anyhow::Result<ExitCode> {
     println!("cargo::rerun-if-changed=build");
@@ -22,6 +23,8 @@ fn main() -> anyhow::Result<ExitCode> {
     if envs::build_always() {
         println!("cargo::rerun-if-changed=/var/empty/hack_nonexistent_file_to_always_rerun");
     }
+
+    identity::emit_kernel_identity().context("cannot compute kernel identity")?;
 
     let target_os = env::var("CARGO_CFG_TARGET_OS")?;
 

@@ -1,12 +1,15 @@
 use std::any::Any;
 
+use half::bf16;
+
 use crate::{
     backends::common::{
-        Backend, CommandBuffer, CommandBufferEncoding, Context, DeviceCapabilities, GpuBuffer, Kernels, SparseBuffer,
+        Backend, Buffer, CommandBuffer, CommandBufferEncoding, Context, DeviceCapabilities, GpuBuffer, Kernels,
+        SparseBuffer,
         gpu_types::{kv_cache_update::Copy, ring::RingParams},
         kernel::{AttentionKernel, KVCacheUpdateKernel, kv_layout::KVLayout},
     },
-    encodable_block::mixer::{MixerState, attention::Attention},
+    encodable_block::mixer::{MIXER_SNAPSHOT_KIND_ATTENTION, MixerSnapshotLayout, MixerState, attention::Attention},
 };
 
 pub const ATTENTION_SUFFIX_CAPACITY: u32 = 1024; // TODO: remove hardcoded suffix capacity
@@ -248,7 +251,196 @@ impl<B: Backend> AttentionState<B> {
     }
 }
 
+impl<B: Backend> AttentionState<B> {
+    fn snapshot_meta(&self) -> Vec<u64> {
+        let (variant, offset, length, capacity) = match self.cache {
+            KVCacheState::Full {
+                length,
+            } => (0, 0, length, 0),
+            KVCacheState::Ring {
+                offset,
+                length,
+                capacity,
+            } => (1, offset, length, capacity),
+        };
+        vec![
+            variant,
+            offset as u64,
+            length as u64,
+            capacity as u64,
+            self.kv.layout.head_dim as u64,
+            self.kv.layout.num_kv_heads as u64,
+            self.kv.layout.key_alignment as u64,
+            self.kv.layout.backend_opaque_layout as u64,
+        ]
+    }
+
+    /// Cache state described by `layout`, checked against this state's cache variant. The values come
+    /// from a file, so they are range-checked before use.
+    fn restored_cache(
+        &self,
+        layout: &MixerSnapshotLayout,
+        context_length: u32,
+    ) -> Result<KVCacheState, String> {
+        let to_u32 = |value: u64, name: &str| {
+            u32::try_from(value).map_err(|_| format!("attention: {name} {value} does not fit in u32"))
+        };
+        let variant = layout.meta[0];
+        let offset = to_u32(layout.meta[1], "ring offset")?;
+        let length = to_u32(layout.meta[2], "length")?;
+        let capacity = to_u32(layout.meta[3], "capacity")?;
+
+        match (&self.cache, variant) {
+            (
+                KVCacheState::Full {
+                    ..
+                },
+                0,
+            ) => {
+                if offset != 0 || capacity != 0 {
+                    return Err("attention: full cache with ring fields set".to_string());
+                }
+                if length != context_length {
+                    return Err(format!("attention: full cache length {length} != context length {context_length}"));
+                }
+                Ok(KVCacheState::Full {
+                    length,
+                })
+            },
+            (
+                KVCacheState::Ring {
+                    capacity: our_capacity,
+                    ..
+                },
+                1,
+            ) if *our_capacity == capacity => {
+                if offset >= capacity {
+                    return Err(format!("attention: ring offset {offset} >= capacity {capacity}"));
+                }
+                if length > capacity || length != context_length.min(capacity) {
+                    return Err(format!(
+                        "attention: ring length {length} inconsistent with capacity {capacity} / context {context_length}"
+                    ));
+                }
+                Ok(KVCacheState::Ring {
+                    offset,
+                    length,
+                    capacity,
+                })
+            },
+            _ => Err("attention: cache variant or ring capacity mismatch".to_string()),
+        }
+    }
+
+    /// Checks that `length` keys plus the decode suffix fit in the buffers this state allocated.
+    /// `length` comes from a file, so the byte math is checked for overflow before the layout
+    /// helpers (which do not check) run.
+    fn check_capacity(
+        &self,
+        length: u32,
+    ) -> Result<(), String> {
+        let layout = &self.kv.layout;
+        let needed_keys = length
+            .checked_add(ATTENTION_SUFFIX_CAPACITY)
+            .ok_or_else(|| format!("attention: length {length} plus suffix overflows"))?;
+        // A zero alignment would make `next_multiple_of` panic.
+        if layout.key_alignment == 0 || needed_keys.checked_next_multiple_of(layout.key_alignment).is_none() {
+            return Err(format!("attention: length {length} is not representable in the KV layout"));
+        }
+        let keys_aligned = needed_keys.next_multiple_of(layout.key_alignment) as u64;
+        let per_key_max = (layout.head_dim as u64).max(size_of::<bf16>() as u64);
+        let products_fit = keys_aligned
+            .checked_mul(layout.num_kv_heads as u64)
+            .and_then(|bytes| bytes.checked_mul(per_key_max))
+            .is_some_and(|bytes| usize::try_from(bytes).is_ok());
+        if !products_fit {
+            return Err(format!("attention: length {length} overflows the KV byte math"));
+        }
+        let code_bytes = layout.code_bytes(needed_keys);
+        let scale_bytes = layout.scale_bytes(needed_keys);
+        let fits = |needed: usize, buffers: [&dyn GpuBuffer<Backend = B>; 2]| {
+            buffers.iter().all(|buffer| needed <= Buffer::size(*buffer))
+        };
+        if !fits(code_bytes, [self.kv.k_codes.as_ref(), self.kv.v_codes.as_ref()])
+            || !fits(scale_bytes, [self.kv.k_scales.as_ref(), self.kv.v_scales.as_ref()])
+        {
+            return Err(format!("attention: length {length} (plus decode suffix) exceeds this state's KV buffers"));
+        }
+        Ok(())
+    }
+
+    fn snapshot_bytes(
+        &self,
+        length: u32,
+    ) -> Vec<u64> {
+        // The KV layout is key-block-major, so the first `length` keys (physical slots [0, length)
+        // for a ring cache) occupy a contiguous leading byte range of each buffer.
+        let code_bytes = self.kv.layout.code_bytes(length) as u64;
+        let scale_bytes = self.kv.layout.scale_bytes(length) as u64;
+        vec![code_bytes, code_bytes, scale_bytes, scale_bytes]
+    }
+}
+
 impl<B: Backend> MixerState<B> for AttentionState<B> {
+    fn snapshot_layout(&self) -> Result<MixerSnapshotLayout, String> {
+        let length = self.cache.view().prefix_len();
+        Ok(MixerSnapshotLayout {
+            kind: MIXER_SNAPSHOT_KIND_ATTENTION,
+            meta: self.snapshot_meta(),
+            buffer_bytes: self.snapshot_bytes(length),
+        })
+    }
+
+    fn snapshot_buffers(&self) -> Vec<&dyn GpuBuffer<Backend = B>> {
+        vec![self.kv.k_codes.as_ref(), self.kv.v_codes.as_ref(), self.kv.k_scales.as_ref(), self.kv.v_scales.as_ref()]
+    }
+
+    fn zero_unwritten_snapshot_bytes(
+        &self,
+        buffers: &mut [&mut [u8]],
+    ) -> bool {
+        // The last key block is rounded up to `key_alignment` and can hold slots no key was written
+        // to, or stale speculative keys. Clear exactly those slots.
+        let keys = self.cache.view().prefix_len();
+        let layout = &self.kv.layout;
+        let [k_codes, v_codes, k_scales, v_scales] = buffers else {
+            return false;
+        };
+        layout.zero_unwritten_codes(k_codes, keys, false)
+            && layout.zero_unwritten_codes(v_codes, keys, true)
+            && layout.zero_unwritten_scales(k_scales, keys)
+            && layout.zero_unwritten_scales(v_scales, keys)
+    }
+
+    fn snapshot_buffers_mut(&mut self) -> Vec<&mut dyn GpuBuffer<Backend = B>> {
+        vec![self.kv.k_codes.as_mut(), self.kv.v_codes.as_mut(), self.kv.k_scales.as_mut(), self.kv.v_scales.as_mut()]
+    }
+
+    fn restore_layout(
+        &mut self,
+        layout: &MixerSnapshotLayout,
+        context_length: u32,
+    ) -> Result<(), String> {
+        if layout.kind != MIXER_SNAPSHOT_KIND_ATTENTION || layout.meta.len() != 8 {
+            return Err(format!("attention: unexpected snapshot kind {} / meta {:?}", layout.kind, layout.meta));
+        }
+        let ours = self.snapshot_meta();
+        // head_dim, num_kv_heads, key_alignment and the backend layout must match exactly.
+        if ours[4..] != layout.meta[4..] {
+            return Err(format!("attention: KV layout mismatch, saved {:?}, ours {:?}", &layout.meta[4..], &ours[4..]));
+        }
+        let cache = self.restored_cache(layout, context_length)?;
+        let length = cache.view().prefix_len();
+        self.check_capacity(length)?;
+
+        let previous = std::mem::replace(&mut self.cache, cache);
+        if self.snapshot_bytes(length) != layout.buffer_bytes {
+            self.cache = previous;
+            return Err("attention: buffer byte counts mismatch".to_string());
+        }
+        Ok(())
+    }
+
     fn prepare(
         &mut self,
         context_length: u32,

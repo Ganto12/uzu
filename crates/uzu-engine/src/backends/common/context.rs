@@ -11,6 +11,28 @@ pub trait Context: Sized + Send + Sync {
 
     fn device_name(&self) -> Option<&str>;
 
+    /// Identity of the device for numerics purposes: anything that can change a kernel's result
+    /// (name, core count, matrix-extension support). Used to key persisted state, so two devices
+    /// that could compute differently must not share a fingerprint. `"unknown"` means the backend
+    /// cannot tell, and callers must then refuse to persist or restore.
+    fn device_fingerprint(&self) -> String {
+        self.device_name().unwrap_or("unknown").to_string()
+    }
+
+    /// Batch-invariant numerics. When enabled, kernels pick the same plan (tiling, split count,
+    /// kernel variant) for every multi-token batch, so each token's result is bit-identical no
+    /// matter how its prompt was split into batches. Needed for exact prefix-cache restores at
+    /// any breakpoint. Backends without batch-dependent plans can ignore it.
+    fn set_batch_invariant(
+        &self,
+        _enabled: bool,
+    ) {
+    }
+
+    fn batch_invariant(&self) -> bool {
+        false
+    }
+
     fn create_command_buffer(
         &self,
         name: Option<&str>,

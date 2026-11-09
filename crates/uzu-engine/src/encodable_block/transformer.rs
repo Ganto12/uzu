@@ -5,13 +5,14 @@ use thiserror::Error;
 
 use crate::{
     backends::common::{
-        Backend, Buffer, BufferRef, CommandBuffer, CommandBufferEncoding, Kernels, kernel::TensorAddScaleKernel,
+        Backend, Buffer, BufferRef, CommandBuffer, CommandBufferEncoding, GpuBuffer, Kernels,
+        kernel::TensorAddScaleKernel,
     },
     config::{rope::AnyRoPEConfig, transformer::TransformerConfig},
     data_type::DataType,
     encodable_block::{
         batch_topology::BatchTopology,
-        mixer::{MixerState, attention::rope::PrecalculatedRoPE},
+        mixer::{MixerSnapshotLayout, MixerState, attention::rope::PrecalculatedRoPE},
         normalization::{Normalization, NormalizationNewError, PostLayerScalar, ShortcutMode},
         transformer_layer::{TransformerLayer, TransformerLayerError},
     },
@@ -34,9 +35,102 @@ pub struct TransformerEncodeOutput<B: Backend> {
     pub hidden_features: Option<Box<[B::ScratchBuffer]>>,
 }
 
+/// Per-layer entry of a transformer state snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum TransformerLayerSnapshot {
+    Owned(MixerSnapshotLayout),
+    Shared(u32),
+}
+
 impl<B: Backend> TransformerState<B> {
     pub fn context_length(&self) -> u32 {
         self.context_length
+    }
+
+    pub fn snapshot_layout(&self) -> Result<Vec<TransformerLayerSnapshot>, String> {
+        self.layer_states
+            .iter()
+            .map(|layer_state| {
+                Ok(match layer_state {
+                    TransformerLayerStateType::Owned(state) => {
+                        TransformerLayerSnapshot::Owned(state.snapshot_layout()?)
+                    },
+                    TransformerLayerStateType::Shared(index) => TransformerLayerSnapshot::Shared(*index),
+                })
+            })
+            .collect()
+    }
+
+    /// All state buffers of owned layers, in layer order then per-layer buffer order.
+    pub fn snapshot_buffers(&self) -> Vec<&dyn GpuBuffer<Backend = B>> {
+        self.layer_states
+            .iter()
+            .flat_map(|layer_state| match layer_state {
+                TransformerLayerStateType::Owned(state) => state.snapshot_buffers(),
+                TransformerLayerStateType::Shared(_) => Vec::new(),
+            })
+            .collect()
+    }
+
+    /// Zeroes the bytes of every owned layer's live snapshot ranges that its kernels never wrote.
+    /// `buffers` are the CPU copies in `snapshot_buffers` order. `false` if any layer cannot prove
+    /// which bytes are initialised.
+    pub fn zero_unwritten_snapshot_bytes(
+        &self,
+        buffers: &mut [&mut [u8]],
+    ) -> bool {
+        let mut rest = buffers;
+        for layer_state in &self.layer_states {
+            let TransformerLayerStateType::Owned(state) = layer_state else {
+                continue;
+            };
+            let count = state.snapshot_buffers().len();
+            if count > rest.len() {
+                return false;
+            }
+            let (own, remaining) = std::mem::take(&mut rest).split_at_mut(count);
+            if !state.zero_unwritten_snapshot_bytes(own) {
+                return false;
+            }
+            rest = remaining;
+        }
+        rest.is_empty()
+    }
+
+    pub fn snapshot_buffers_mut(&mut self) -> Vec<&mut dyn GpuBuffer<Backend = B>> {
+        self.layer_states
+            .iter_mut()
+            .flat_map(|layer_state| match layer_state {
+                TransformerLayerStateType::Owned(state) => state.snapshot_buffers_mut(),
+                TransformerLayerStateType::Shared(_) => Vec::new(),
+            })
+            .collect()
+    }
+
+    /// Adopts a saved layout into this freshly created state. Buffers must be filled separately.
+    ///
+    /// Layers are restored one after another and `context_length` is set last. On `Err`, earlier
+    /// layers may already be modified, so the whole state must be discarded and not used.
+    pub fn restore_layout(
+        &mut self,
+        layers: &[TransformerLayerSnapshot],
+        context_length: u32,
+    ) -> Result<(), String> {
+        if layers.len() != self.layer_states.len() {
+            return Err(format!("layer count mismatch: saved {}, model {}", layers.len(), self.layer_states.len()));
+        }
+        for (index, (saved, ours)) in layers.iter().zip(self.layer_states.iter_mut()).enumerate() {
+            match (saved, ours) {
+                (TransformerLayerSnapshot::Owned(layout), TransformerLayerStateType::Owned(state)) => {
+                    state.restore_layout(layout, context_length).map_err(|reason| format!("layer {index}: {reason}"))?
+                },
+                (TransformerLayerSnapshot::Shared(saved), TransformerLayerStateType::Shared(ours)) if saved == ours => {
+                },
+                _ => return Err(format!("layer {index}: owned/shared mismatch")),
+            }
+        }
+        self.context_length = context_length;
+        Ok(())
     }
 
     pub fn prepare(

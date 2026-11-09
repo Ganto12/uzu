@@ -3,7 +3,7 @@ use std::{
     path::Path,
     sync::{
         Arc, OnceLock, Weak,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -44,6 +44,8 @@ pub struct MetalContext {
     pub gpu_core_count: u32,
     pub supports_mxu: bool,
     pub device_name: String,
+    /// See `Context::set_batch_invariant`. Shared with kernels that decide their path at encode time.
+    pub batch_invariant: Arc<AtomicBool>,
     pub(super) residency_set: Arc<Mutex<Retained<ProtocolObject<dyn MTLResidencySet>>>>,
     pub command_queue: Retained<ProtocolObject<dyn MTL4CommandQueue>>,
     pub(super) sparse_queue: Retained<ProtocolObject<dyn MTL4CommandQueue>>,
@@ -162,6 +164,7 @@ impl Context for MetalContext {
             gpu_core_count,
             supports_mxu,
             device_name,
+            batch_invariant: Arc::new(AtomicBool::new(false)),
             residency_set: Arc::new(Mutex::new(residency_set)),
             command_queue,
             sparse_queue,
@@ -181,6 +184,21 @@ impl Context for MetalContext {
 
     fn device_name(&self) -> Option<&str> {
         Some(&self.device_name)
+    }
+
+    fn device_fingerprint(&self) -> String {
+        format!("{} gpu_cores={} mxu={}", self.device_name, self.gpu_core_count, self.supports_mxu)
+    }
+
+    fn set_batch_invariant(
+        &self,
+        enabled: bool,
+    ) {
+        self.batch_invariant.store(enabled, Ordering::Relaxed);
+    }
+
+    fn batch_invariant(&self) -> bool {
+        self.batch_invariant.load(Ordering::Relaxed)
     }
 
     fn create_command_buffer(

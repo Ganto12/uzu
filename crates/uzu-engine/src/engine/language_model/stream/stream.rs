@@ -124,6 +124,11 @@ enum DecodingState<B: Backend> {
     Closed,
 }
 
+/// Prefill splits its input into batches of this many tokens, counted from the start of each
+/// stream call.
+// NOTE: this is required for attention correctness (hardcoded suffix 1024). This is really bad design, attention should be rewritten to allow on-demand suffix length
+pub const PREFILL_BATCH_SIZE: usize = 1024;
+
 fn prefill_chunk_parts(
     input_chunk: &[u64],
     last_batch: bool,
@@ -145,6 +150,7 @@ pub struct LanguageModelStream<'a, B: Backend> {
     context_ring: Option<B::GlobalGpuBuffer>,
     decoding_state: DecodingState<B>,
     metrics: TokenStreamMetrics,
+    captured_logits: Option<B::GlobalGpuBuffer>,
 }
 
 impl<'a, B: Backend> LanguageModelStream<'a, B> {
@@ -164,6 +170,10 @@ impl<'a, B: Backend> LanguageModelStream<'a, B> {
             .is_some_and(|max_context_length| model_state.tokens.len() + input.len() > max_context_length as usize)
         {
             return Err(LanguageModelStreamError::ContextOverflow);
+        }
+
+        if model.engine.context.batch_invariant() != model_state.batch_invariant {
+            model_state.numerics_mode_changed = true;
         }
 
         let allocation_pool = model.engine.context.create_allocation_pool();
@@ -197,12 +207,12 @@ impl<'a, B: Backend> LanguageModelStream<'a, B> {
 
         let mut metrics = TokenStreamMetrics::default();
 
+        let mut captured_logits = None;
         let decoding_state = if !input.is_empty() {
             let _capture_span = CAPTURE_MATCHER.capture::<B>(&model.engine.context, "prefill")?;
             model_state.last_output_token.take();
 
-            // NOTE: this is required for attention correctness (hardcoded suffix 1024). This is really bad design, attention should be rewritten to allow on-demand suffix length
-            let max_batch_size = 1024;
+            let max_batch_size = PREFILL_BATCH_SIZE;
             let number_of_batches = input.len().div_ceil(max_batch_size);
 
             model_state
@@ -265,6 +275,16 @@ impl<'a, B: Backend> LanguageModelStream<'a, B> {
 
                 if sample_last {
                     let logits = logits.unwrap();
+                    if options.capture_logits {
+                        let bytes = crate::backends::common::Buffer::size(&logits);
+                        let mut tap =
+                            model.engine.context.create_buffer_gpu(bytes).map_err(LanguageModelStreamError::Backend)?;
+                        command_buffer.encode_copy(
+                            (&logits).subrange(..bytes),
+                            crate::backends::common::BufferMut::subrange_mut(&mut tap, ..bytes),
+                        );
+                        captured_logits = Some(tap);
+                    }
 
                     let seeds = if matches!(options.sampling_method, SamplingMethod::Stochastic { .. }) {
                         Some(
@@ -374,7 +394,19 @@ impl<'a, B: Backend> LanguageModelStream<'a, B> {
             context_ring,
             decoding_state,
             metrics,
+            captured_logits,
         })
+    }
+
+    /// Raw bytes of the logits row sampled at the end of prefill, if `capture_logits` was set.
+    /// Call after the first `generate()`, which waits for the prefill to finish.
+    pub async fn captured_logits(&mut self) -> Result<Option<Vec<u8>>, LanguageModelStreamError<B>> {
+        match &self.captured_logits {
+            None => Ok(None),
+            Some(tap) => {
+                Ok(Some(self.model.engine.context.copyout::<u8>(tap).await.map_err(LanguageModelStreamError::Backend)?))
+            },
+        }
     }
 
     pub async fn generate(&mut self) -> Result<Option<u64>, LanguageModelStreamError<B>> {

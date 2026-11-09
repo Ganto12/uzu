@@ -14,7 +14,8 @@ use crate::{
     speculators::dflash_tfm::DFlashTreeError,
 };
 pub use crate::{
-    encodable_block::sampling::SamplingMethod, engine::language_model::stream::stream::LanguageModelStream,
+    encodable_block::sampling::SamplingMethod,
+    engine::language_model::stream::stream::{LanguageModelStream, PREFILL_BATCH_SIZE},
 };
 
 mod stream;
@@ -23,6 +24,10 @@ pub struct LanguageModelStreamOptions {
     pub sampling_method: SamplingMethod,
     pub timestamps: Option<Sender<Box<[TimestampSpan]>>>,
     pub grammar: Option<Grammar>,
+    /// Keep a copy of the logits of the token sampled at the end of prefill, readable with
+    /// `LanguageModelStream::captured_logits` once the first token is generated. For bit-level
+    /// equivalence checks (prefix-cache restores, batch-invariant kernels); off by default.
+    pub capture_logits: bool,
 }
 
 #[derive(Debug, Error)]
@@ -51,6 +56,7 @@ impl<B: Backend> LanguageModel<B> {
             sampling_method: self.default_sampling_method(),
             timestamps: None,
             grammar: None,
+            capture_logits: false,
         }
     }
 

@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use crate::{
     backends::common::{
-        Backend, Buffer, BufferRef, CommandBuffer, CommandBufferEncoding, Context, Kernels,
+        Backend, Buffer, BufferRef, CommandBuffer, CommandBufferEncoding, Context, GpuBuffer, Kernels,
         kernel::{ShortConvDecodeKernel, ShortConvPackKernel, ShortConvPrefillKernel, ShortConvTrieKernel},
     },
     config::token_mixer::short_conv::ShortConvConfig,
@@ -11,7 +11,10 @@ use crate::{
     encodable_block::{
         batch_topology::BatchTopology,
         linear::{Linear, LinearBlockError},
-        mixer::{Mixer, MixerEncodeError, MixerState, attention::rope::PrecalculatedRoPE},
+        mixer::{
+            MIXER_SNAPSHOT_KIND_SHORT_CONV, Mixer, MixerEncodeError, MixerSnapshotLayout, MixerState,
+            attention::rope::PrecalculatedRoPE,
+        },
     },
     safetensors::{ParameterLoaderError, ParameterTree},
     utils::{maybe_mut::MaybeMut, size_for_shape::size_for_shape},
@@ -33,6 +36,52 @@ pub struct ShortConvState<B: Backend> {
 }
 
 impl<B: Backend> MixerState<B> for ShortConvState<B> {
+    fn snapshot_layout(&self) -> Result<MixerSnapshotLayout, String> {
+        if self.suffix_state.is_some() {
+            return Err("short conv state has unaccepted tokens".to_string());
+        }
+        Ok(MixerSnapshotLayout {
+            kind: MIXER_SNAPSHOT_KIND_SHORT_CONV,
+            meta: vec![self.is_empty as u64],
+            buffer_bytes: vec![self.conv_state.size() as u64],
+        })
+    }
+
+    fn snapshot_buffers(&self) -> Vec<&dyn GpuBuffer<Backend = B>> {
+        vec![&self.conv_state]
+    }
+
+    fn zero_unwritten_snapshot_bytes(
+        &self,
+        buffers: &mut [&mut [u8]],
+    ) -> bool {
+        // An empty state was never written; the first encode zero-fills it, so zeros are its value.
+        if self.is_empty {
+            buffers.iter_mut().for_each(|buffer| buffer.fill(0));
+        }
+        true
+    }
+
+    fn snapshot_buffers_mut(&mut self) -> Vec<&mut dyn GpuBuffer<Backend = B>> {
+        vec![&mut self.conv_state]
+    }
+
+    fn restore_layout(
+        &mut self,
+        layout: &MixerSnapshotLayout,
+        _context_length: u32,
+    ) -> Result<(), String> {
+        let expected = vec![self.conv_state.size() as u64];
+        if layout.kind != MIXER_SNAPSHOT_KIND_SHORT_CONV || layout.meta.len() != 1 || layout.buffer_bytes != expected {
+            return Err(format!("short conv: layout mismatch, saved {layout:?}, expected bytes {expected:?}"));
+        }
+        if layout.meta[0] > 1 {
+            return Err(format!("short conv: invalid is_empty flag {}", layout.meta[0]));
+        }
+        self.is_empty = layout.meta[0] != 0;
+        Ok(())
+    }
+
     fn prepare(
         &mut self,
         _context_length: u32,

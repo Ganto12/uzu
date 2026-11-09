@@ -68,6 +68,8 @@ xxhash-rust = { workspace = true, features = ["xxh3"], optional = true }
 
 [dependencies]
 uzu-engine-macros.workspace = true
+blake3.workspace = true
+xxhash-rust = { workspace = true, features = ["xxh3"] }
 bitflags.workspace = true
 derive_more = { workspace = true, features = ["debug"] }
 shoji.workspace = true
@@ -91,7 +93,6 @@ wgpu = { workspace = true, optional = true }
 [target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "visionos"))'.dependencies]
 objc2 = { workspace = true, optional = true }
 obfstr = { workspace = true, optional = true }
-xxhash-rust = { workspace = true, features = ["xxh3"], optional = true }
 metal = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
